@@ -42,6 +42,11 @@ public struct ProjectGrouper: Sendable {
             if lhs.isUnnamed != rhs.isUnnamed {
                 return !lhs.isUnnamed
             }
+            let lhsUpdatedAt = lhs.threads.map(\.projectRecencyAt).max() ?? .distantPast
+            let rhsUpdatedAt = rhs.threads.map(\.projectRecencyAt).max() ?? .distantPast
+            if lhsUpdatedAt != rhsUpdatedAt {
+                return lhsUpdatedAt > rhsUpdatedAt
+            }
             let comparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
             if comparison == .orderedSame {
                 return lhs.id < rhs.id

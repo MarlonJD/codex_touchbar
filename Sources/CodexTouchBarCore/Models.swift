@@ -5,12 +5,20 @@ public struct ActiveThread: Equatable, Sendable {
     public let cwd: URL
     public let startedAt: Date
     public let updatedAt: Date
+    public let projectRecencyAt: Date
 
-    public init(id: String, cwd: URL, startedAt: Date, updatedAt: Date) {
+    public init(
+        id: String,
+        cwd: URL,
+        startedAt: Date,
+        updatedAt: Date,
+        projectRecencyAt: Date? = nil
+    ) {
         self.id = id
         self.cwd = cwd
         self.startedAt = startedAt
         self.updatedAt = updatedAt
+        self.projectRecencyAt = projectRecencyAt ?? updatedAt
     }
 }
 

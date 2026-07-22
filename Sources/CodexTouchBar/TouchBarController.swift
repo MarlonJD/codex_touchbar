@@ -10,6 +10,7 @@ final class TouchBarController: NSObject {
     private static let scrubberItemIdentifier = NSUserInterfaceItemIdentifier("dev.marlonjd.CodexTouchBar.project-cell")
     private static let effortItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.effort")
     private static let speedItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.speed")
+    private static let backItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.settings.back")
 
     var onProjectSelected: ((ProjectGroup) -> Void)?
     var onEffortSelected: ((EffortChoice) -> Void)?
@@ -22,9 +23,18 @@ final class TouchBarController: NSObject {
     private let scrubber = NSScrubber()
     private let trayItem: NSCustomTouchBarItem
     private var trayItemWasAdded = false
+    private var layoutState = TouchBarLayoutState()
     private var settingSelections: [NSTouchBarItem.Identifier: SettingSelection] = [:]
-    private lazy var effortPopoverItem = makeEffortPopoverItem()
-    private lazy var speedPopoverItem = makeSpeedPopoverItem()
+    private lazy var effortButton = makeMainSettingButton(
+        title: effortTitle,
+        symbolName: "brain.head.profile",
+        action: #selector(showEffortOptions)
+    )
+    private lazy var speedButton = makeMainSettingButton(
+        title: speedTitle,
+        symbolName: "speedometer",
+        action: #selector(showSpeedOptions)
+    )
 
     private enum SettingSelection {
         case effort(EffortChoice)
@@ -66,19 +76,37 @@ final class TouchBarController: NSObject {
     func update(groups: [ProjectGroup]) {
         self.groups = groups
         scrubber.reloadData()
+        enforceCloseBoxVisibility()
     }
 
     func showSelectedEffort(_ choice: EffortChoice) {
-        effortPopoverItem.collapsedRepresentationLabel = "\(effortTitle): \(choice.title)"
+        let selectedTitle = "\(effortTitle): \(choice.title)"
+        effortButton.image = TouchBarImageRenderer.image(
+            title: TouchBarSettingTitle.mainTitle(
+                baseTitle: effortTitle,
+                selectedTitle: choice.title
+            ),
+            symbolName: "brain.head.profile"
+        )
+        effortButton.setAccessibilityLabel(selectedTitle)
     }
 
     func showSelectedSpeed(_ choice: SpeedChoice) {
-        speedPopoverItem.collapsedRepresentationLabel = "\(speedTitle): \(choice.title)"
+        let selectedTitle = "\(speedTitle): \(choice.title)"
+        speedButton.image = TouchBarImageRenderer.image(
+            title: TouchBarSettingTitle.mainTitle(
+                baseTitle: speedTitle,
+                selectedTitle: choice.title
+            ),
+            symbolName: "speedometer"
+        )
+        speedButton.setAccessibilityLabel(selectedTitle)
     }
 
     @discardableResult
     func present() -> Bool {
         if isPresented {
+            enforceCloseBoxVisibility()
             return true
         }
         guard isAvailable else {
@@ -87,10 +115,13 @@ final class TouchBarController: NSObject {
         if trayItemWasAdded {
             CTBSetControlStripPresence(Self.trayItemIdentifier.rawValue, true)
         }
-        CTBSetCloseBoxVisible(true)
+        CTBSetCloseBoxVisible(layoutState.showsSystemCloseBox)
         isPresented = CTBPresentSystemModalTouchBar(touchBar, Self.trayItemIdentifier.rawValue)
+        CTBSetCloseBoxVisible(
+            layoutState.closeBoxVisibility(afterPresentationSucceeded: isPresented)
+        )
+        enforceCloseBoxVisibility()
         if !isPresented {
-            CTBSetCloseBoxVisible(true)
             if trayItemWasAdded {
                 CTBSetControlStripPresence(Self.trayItemIdentifier.rawValue, false)
             }
@@ -118,12 +149,8 @@ final class TouchBarController: NSObject {
 
         touchBar.customizationIdentifier = Self.barIdentifier
         touchBar.delegate = self
-        touchBar.defaultItemIdentifiers = [
-            Self.projectsItemIdentifier,
-            .flexibleSpace,
-            Self.effortItemIdentifier,
-            Self.speedItemIdentifier,
-        ]
+        registerSettingSelections()
+        updateVisibleItems()
 
         let layout = NSScrubberFlowLayout()
         layout.itemSpacing = 4
@@ -146,6 +173,7 @@ final class TouchBarController: NSObject {
         ])
         scrubber.setAccessibilityLabel("Active Codex projects")
 
+        CTBSetCloseBoxVisible(layoutState.showsSystemCloseBox)
         trayItemWasAdded = CTBAddSystemTrayItem(trayItem)
         if trayItemWasAdded {
             CTBSetControlStripPresence(Self.trayItemIdentifier.rawValue, false)
@@ -156,6 +184,21 @@ final class TouchBarController: NSObject {
         _ = present()
     }
 
+    @objc private func showEffortOptions() {
+        layoutState.show(.effort)
+        updateVisibleItems()
+    }
+
+    @objc private func showSpeedOptions() {
+        layoutState.show(.speed)
+        updateVisibleItems()
+    }
+
+    @objc private func cancelSettingSelection() {
+        layoutState.cancel()
+        updateVisibleItems()
+    }
+
     @objc private func settingOptionPressed(_ sender: NSButton) {
         guard let rawIdentifier = sender.identifier?.rawValue,
               let selection = settingSelections[NSTouchBarItem.Identifier(rawIdentifier)] else {
@@ -164,10 +207,12 @@ final class TouchBarController: NSObject {
 
         switch selection {
         case let .effort(choice):
-            effortPopoverItem.dismissPopover(nil)
+            layoutState.completeSelection()
+            updateVisibleItems()
             onEffortSelected?(choice)
         case let .speed(choice):
-            speedPopoverItem.dismissPopover(nil)
+            layoutState.completeSelection()
+            updateVisibleItems()
             onSpeedSelected?(choice)
         }
     }
@@ -180,50 +225,66 @@ final class TouchBarController: NSObject {
         Locale.preferredLanguages.first?.hasPrefix("tr") == true ? "Hız" : "Speed"
     }
 
-    private func makeEffortPopoverItem() -> NSPopoverTouchBarItem {
-        let item = NSPopoverTouchBarItem(identifier: Self.effortItemIdentifier)
-        item.customizationLabel = effortTitle
-        item.collapsedRepresentationLabel = effortTitle
-        item.collapsedRepresentationImage = NSImage(
-            systemSymbolName: "brain.head.profile",
-            accessibilityDescription: effortTitle
-        )
-        item.showsCloseButton = true
-        item.popoverTouchBar = makeOptionsTouchBar(
-            prefix: "effort",
-            selections: EffortChoice.allCases.map { ($0.title, .effort($0)) }
-        )
-        return item
+    private var backTitle: String {
+        Locale.preferredLanguages.first?.hasPrefix("tr") == true ? "Geri" : "Back"
     }
 
-    private func makeSpeedPopoverItem() -> NSPopoverTouchBarItem {
-        let item = NSPopoverTouchBarItem(identifier: Self.speedItemIdentifier)
-        item.customizationLabel = speedTitle
-        item.collapsedRepresentationLabel = speedTitle
-        item.collapsedRepresentationImage = NSImage(
-            systemSymbolName: "speedometer",
-            accessibilityDescription: speedTitle
-        )
-        item.showsCloseButton = true
-        item.popoverTouchBar = makeOptionsTouchBar(
-            prefix: "speed",
-            selections: SpeedChoice.allCases.map { ($0.title, .speed($0)) }
-        )
-        return item
+    private func makeMainSettingButton(title: String, symbolName: String, action: Selector) -> NSButton {
+        let image = TouchBarImageRenderer.image(title: title, symbolName: symbolName)
+        let button = NSButton(image: image, target: self, action: action)
+        button.bezelStyle = .texturedRounded
+        button.imagePosition = .imageOnly
+        button.setAccessibilityLabel(title)
+        return button
     }
 
-    private func makeOptionsTouchBar(
-        prefix: String,
-        selections: [(title: String, selection: SettingSelection)]
-    ) -> NSTouchBar {
-        let optionsBar = NSTouchBar()
-        optionsBar.delegate = self
-        optionsBar.defaultItemIdentifiers = selections.enumerated().map { index, option in
-            let identifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.\(prefix).\(index)")
-            settingSelections[identifier] = option.selection
-            return identifier
+    private func registerSettingSelections() {
+        for (index, choice) in EffortChoice.allCases.enumerated() {
+            settingSelections[settingIdentifier(prefix: "effort", index: index)] = .effort(choice)
         }
-        return optionsBar
+        for (index, choice) in SpeedChoice.allCases.enumerated() {
+            settingSelections[settingIdentifier(prefix: "speed", index: index)] = .speed(choice)
+        }
+    }
+
+    private func updateVisibleItems() {
+        switch layoutState.mode {
+        case .projects:
+            touchBar.defaultItemIdentifiers = [
+                Self.projectsItemIdentifier,
+                .flexibleSpace,
+                Self.effortItemIdentifier,
+                Self.speedItemIdentifier,
+            ]
+        case .setting(.effort):
+            touchBar.defaultItemIdentifiers = [Self.backItemIdentifier]
+                + EffortChoice.allCases.indices.map { settingIdentifier(prefix: "effort", index: $0) }
+        case .setting(.speed):
+            touchBar.defaultItemIdentifiers = [
+                Self.backItemIdentifier,
+                .flexibleSpace,
+            ]
+                + SpeedChoice.allCases.indices.map { settingIdentifier(prefix: "speed", index: $0) }
+                + [.flexibleSpace]
+        }
+        enforceCloseBoxVisibility()
+    }
+
+    private func settingIdentifier(prefix: String, index: Int) -> NSTouchBarItem.Identifier {
+        NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.\(prefix).\(index)")
+    }
+
+    private func enforceCloseBoxVisibility() {
+        guard isPresented else {
+            return
+        }
+        CTBSetCloseBoxVisible(layoutState.showsSystemCloseBox)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isPresented else {
+                return
+            }
+            CTBSetCloseBoxVisible(self.layoutState.showsSystemCloseBox)
+        }
     }
 }
 
@@ -232,10 +293,29 @@ extension TouchBarController: NSTouchBarDelegate {
     func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
         guard identifier == Self.projectsItemIdentifier else {
             if identifier == Self.effortItemIdentifier {
-                return effortPopoverItem
+                let item = NSCustomTouchBarItem(identifier: identifier)
+                item.customizationLabel = effortTitle
+                item.view = effortButton
+                return item
             }
             if identifier == Self.speedItemIdentifier {
-                return speedPopoverItem
+                let item = NSCustomTouchBarItem(identifier: identifier)
+                item.customizationLabel = speedTitle
+                item.view = speedButton
+                return item
+            }
+            if identifier == Self.backItemIdentifier {
+                let item = NSCustomTouchBarItem(identifier: identifier)
+                let image = TouchBarImageRenderer.image(
+                    title: backTitle,
+                    symbolName: "chevron.backward"
+                )
+                let button = NSButton(image: image, target: self, action: #selector(cancelSettingSelection))
+                button.bezelStyle = .texturedRounded
+                button.imagePosition = .imageOnly
+                button.setAccessibilityLabel(backTitle)
+                item.view = button
+                return item
             }
             guard let selection = settingSelections[identifier] else {
                 return nil
@@ -247,9 +327,12 @@ extension TouchBarController: NSTouchBarDelegate {
             case let .speed(choice): title = choice.title
             }
             let item = NSCustomTouchBarItem(identifier: identifier)
-            let button = NSButton(title: title, target: self, action: #selector(settingOptionPressed(_:)))
+            let image = TouchBarImageRenderer.image(title: title)
+            let button = NSButton(image: image, target: self, action: #selector(settingOptionPressed(_:)))
             button.identifier = NSUserInterfaceItemIdentifier(identifier.rawValue)
             button.bezelStyle = .texturedRounded
+            button.imagePosition = .imageOnly
+            button.setAccessibilityLabel(title)
             item.view = button
             return item
         }

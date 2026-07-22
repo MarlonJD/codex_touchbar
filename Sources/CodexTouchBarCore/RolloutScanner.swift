@@ -5,6 +5,7 @@ public actor RolloutScanner {
     private struct CachedRollout {
         let modificationDate: Date
         let fileSize: Int
+        let processedOffset: UInt64
         let allowsSubagent: Bool
         let record: RolloutRecord?
     }
@@ -17,6 +18,8 @@ public actor RolloutScanner {
     private struct IndexedThreadRoot {
         let id: String
         let cwd: URL
+        let updatedAt: Date
+        let projectRecencyAt: Date
         var rolloutURLs: [URL]
     }
 
@@ -61,11 +64,16 @@ public actor RolloutScanner {
                 }
                 .filter(\.isActive)
 
-                guard let startedAt = activeRecords.map(\.thread.startedAt).min(),
-                      let updatedAt = activeRecords.map(\.thread.updatedAt).max() else {
+                guard let startedAt = activeRecords.map(\.thread.startedAt).min() else {
                     return nil
                 }
-                return ActiveThread(id: root.id, cwd: root.cwd, startedAt: startedAt, updatedAt: updatedAt)
+                return ActiveThread(
+                    id: root.id,
+                    cwd: root.cwd,
+                    startedAt: startedAt,
+                    updatedAt: root.updatedAt,
+                    projectRecencyAt: root.projectRecencyAt
+                )
             }
         } else {
             var activeThreadsByID: [String: ActiveThread] = [:]
@@ -121,18 +129,76 @@ public actor RolloutScanner {
             return cached?.record
         }
 
+        if let cached,
+           cached.allowsSubagent == allowsSubagent,
+           fileSize > cached.fileSize,
+           let record = cached.record,
+           let update = try? RolloutTailReader.readChanges(
+               at: standardizedURL,
+               from: cached.processedOffset
+           ) {
+            let updatedRecord = updateRecord(
+                record,
+                with: update.latestEvent,
+                updatedAt: modificationDate
+            )
+            cache[standardizedURL] = CachedRollout(
+                modificationDate: modificationDate,
+                fileSize: fileSize,
+                processedOffset: update.processedOffset,
+                allowsSubagent: allowsSubagent,
+                record: updatedRecord
+            )
+            return updatedRecord
+        }
+
         let record = parseRollout(
             at: standardizedURL,
             updatedAt: modificationDate,
             allowsSubagent: allowsSubagent
         )
+        let processedOffset = (try? RolloutTailReader.endOfLastCompleteLine(
+            at: standardizedURL,
+            fileSize: UInt64(fileSize)
+        )) ?? UInt64(fileSize)
         cache[standardizedURL] = CachedRollout(
             modificationDate: modificationDate,
             fileSize: fileSize,
+            processedOffset: processedOffset,
             allowsSubagent: allowsSubagent,
             record: record
         )
         return record
+    }
+
+    private func updateRecord(
+        _ record: RolloutRecord,
+        with event: RolloutTaskEvent?,
+        updatedAt: Date
+    ) -> RolloutRecord {
+        let isActive: Bool
+        let startedAt: Date
+        switch event?.type {
+        case "task_started":
+            isActive = true
+            startedAt = event?.timestamp ?? updatedAt
+        case "task_complete", "turn_aborted":
+            isActive = false
+            startedAt = record.thread.startedAt
+        default:
+            isActive = record.isActive
+            startedAt = record.thread.startedAt
+        }
+
+        return RolloutRecord(
+            thread: ActiveThread(
+                id: record.thread.id,
+                cwd: record.thread.cwd,
+                startedAt: startedAt,
+                updatedAt: updatedAt
+            ),
+            isActive: isActive
+        )
     }
 
     private func parseRollout(at url: URL, updatedAt: Date, allowsSubagent: Bool) -> RolloutRecord? {
@@ -186,40 +252,77 @@ public actor RolloutScanner {
         defer { sqlite3_close(database) }
 
         let query = """
-        WITH RECURSIVE thread_tree(
+        WITH RECURSIVE recent_members(member_id) AS (
+          SELECT id
+          FROM threads
+          WHERE archived = 0
+            AND updated_at >= ?
+          UNION
+          SELECT edge.parent_thread_id
+          FROM recent_members AS recent
+          JOIN thread_spawn_edges AS edge ON edge.child_thread_id = recent.member_id
+          JOIN threads AS parent ON parent.id = edge.parent_thread_id
+          WHERE parent.archived = 0
+        ),
+        recent_roots(
           root_id,
           root_cwd,
+          root_updated,
+          root_project_recency_ms
+        ) AS (
+          SELECT root.id,
+                 root.cwd,
+                 root.updated_at,
+                 (
+                   SELECT MAX(project_thread.recency_at_ms)
+                   FROM threads AS project_thread
+                   WHERE project_thread.archived = 0
+                     AND project_thread.cwd = root.cwd
+                 )
+          FROM recent_members AS recent
+          JOIN threads AS root ON root.id = recent.member_id
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM thread_spawn_edges AS edge
+            WHERE edge.child_thread_id = root.id
+          )
+          ORDER BY root.updated_at DESC, root.id DESC
+          LIMIT 100
+        ),
+        thread_tree(
+          root_id,
+          root_cwd,
+          root_updated,
+          root_project_recency_ms,
           member_id,
           rollout_path,
           member_updated
         ) AS (
-          SELECT root.id, root.cwd, root.id, root.rollout_path, root.updated_at
-          FROM threads AS root
-          WHERE root.archived = 0
-            AND NOT EXISTS (
-              SELECT 1
-              FROM thread_spawn_edges AS edge
-              WHERE edge.child_thread_id = root.id
-            )
+          SELECT root.root_id,
+                 root.root_cwd,
+                 root.root_updated,
+                 root.root_project_recency_ms,
+                 root.root_id,
+                 thread.rollout_path,
+                 thread.updated_at
+          FROM recent_roots AS root
+          JOIN threads AS thread ON thread.id = root.root_id
           UNION ALL
-          SELECT tree.root_id, tree.root_cwd, child.id, child.rollout_path, child.updated_at
+          SELECT tree.root_id, tree.root_cwd, tree.root_updated,
+                 tree.root_project_recency_ms,
+                 child.id, child.rollout_path, child.updated_at
           FROM thread_tree AS tree
           JOIN thread_spawn_edges AS edge ON edge.parent_thread_id = tree.member_id
           JOIN threads AS child ON child.id = edge.child_thread_id
           WHERE child.archived = 0
-        ),
-        recent_roots AS (
-          SELECT root_id, MAX(member_updated) AS latest_updated
-          FROM thread_tree
-          GROUP BY root_id
-          HAVING latest_updated >= ?
-          ORDER BY latest_updated DESC, root_id DESC
-          LIMIT 100
         )
-        SELECT tree.root_id, tree.root_cwd, tree.rollout_path
+        SELECT tree.root_id,
+               tree.root_cwd,
+               tree.rollout_path,
+               tree.root_updated,
+               tree.root_project_recency_ms
         FROM thread_tree AS tree
-        JOIN recent_roots AS recent ON recent.root_id = tree.root_id
-        ORDER BY recent.latest_updated DESC, tree.root_id, tree.member_updated DESC
+        ORDER BY tree.root_updated DESC, tree.root_id, tree.member_updated DESC
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK,
@@ -246,6 +349,10 @@ public actor RolloutScanner {
                 rootsByID[id] = IndexedThreadRoot(
                     id: id,
                     cwd: URL(fileURLWithPath: String(cString: cwdPointer), isDirectory: true),
+                    updatedAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 3))),
+                    projectRecencyAt: Date(
+                        timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 4)) / 1_000
+                    ),
                     rolloutURLs: [rolloutURL]
                 )
             } else {
@@ -255,7 +362,7 @@ public actor RolloutScanner {
         return rootOrder.compactMap { rootsByID[$0] }
     }
 
-    private func latestTaskEvent(at url: URL) -> (type: String, timestamp: Date?)? {
+    private func latestTaskEvent(at url: URL) -> RolloutTaskEvent? {
         guard let handle = try? FileHandle(forReadingFrom: url),
               let fileSize = try? handle.seekToEnd() else {
             return nil
@@ -287,7 +394,7 @@ public actor RolloutScanner {
                 }
 
                 for line in lines.reversed() {
-                    if let event = taskEvent(in: Data(line)) {
+                    if let event = RolloutTailReader.taskEvent(in: Data(line)) {
                         return event
                     }
                 }
@@ -296,22 +403,7 @@ public actor RolloutScanner {
             }
             position = readStart
         }
-        return leadingFragment.isEmpty ? nil : taskEvent(in: leadingFragment)
-    }
-
-    private func taskEvent(in lineData: Data) -> (type: String, timestamp: Date?)? {
-        guard let object = try? JSONSerialization.jsonObject(with: lineData),
-              let envelope = object as? [String: Any],
-              envelope["type"] as? String == "event_msg",
-              let payload = envelope["payload"] as? [String: Any],
-              let eventType = payload["type"] as? String,
-              ["task_started", "task_complete", "turn_aborted"].contains(eventType) else {
-            return nil
-        }
-
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return (eventType, parseTimestamp(envelope["timestamp"], using: dateFormatter))
+        return leadingFragment.isEmpty ? nil : RolloutTailReader.taskEvent(in: leadingFragment)
     }
 
     private func readSessionMetadata(at url: URL) -> (id: String, cwd: URL, isSubagent: Bool)? {
@@ -352,16 +444,4 @@ public actor RolloutScanner {
         )
     }
 
-    private func parseTimestamp(_ value: Any?, using formatter: ISO8601DateFormatter) -> Date? {
-        guard let timestamp = value as? String else {
-            return nil
-        }
-        if let date = formatter.date(from: timestamp) {
-            return date
-        }
-
-        let fallback = ISO8601DateFormatter()
-        fallback.formatOptions = [.withInternetDateTime]
-        return fallback.date(from: timestamp)
-    }
 }

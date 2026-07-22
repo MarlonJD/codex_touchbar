@@ -7,6 +7,18 @@ enum EffortChoice: String, CaseIterable, Sendable {
     case xhigh
     case ultra
 
+    static let commandOptionCount = 6
+
+    var commandTargetIndex: Int {
+        switch self {
+        case .low: 0
+        case .medium: 1
+        case .high: 2
+        case .xhigh: 3
+        case .ultra: 5
+        }
+    }
+
     var title: String {
         switch self {
         case .low: localized(turkish: "Sınırlı", english: "Low")

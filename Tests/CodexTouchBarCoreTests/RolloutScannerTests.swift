@@ -1,5 +1,5 @@
 import CSQLite
-import CodexTouchBarCore
+@testable import CodexTouchBarCore
 import Foundation
 import Testing
 
@@ -72,13 +72,15 @@ import Testing
     }
     defer { sqlite3_close(database) }
 
-    let updatedAt = Int64(Date().timeIntervalSince1970)
+    let updatedAt = Int64(Date().addingTimeInterval(-120).timeIntervalSince1970)
+    let childUpdatedAt = Int64(Date().addingTimeInterval(-10).timeIntervalSince1970)
     let sql = """
     CREATE TABLE threads (
       id TEXT PRIMARY KEY,
       cwd TEXT NOT NULL,
       rollout_path TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
+      recency_at_ms INTEGER NOT NULL,
       archived INTEGER NOT NULL
     );
     CREATE TABLE thread_spawn_edges (
@@ -86,10 +88,12 @@ import Testing
       child_thread_id TEXT NOT NULL
     );
     INSERT INTO threads VALUES (
-      'visible-root', '/tmp/visible-project', '\(rootRollout.path)', \(updatedAt), 0
+      'visible-root', '/tmp/visible-project', '\(rootRollout.path)',
+      \(updatedAt), \(updatedAt * 1_000), 0
     );
     INSERT INTO threads VALUES (
-      'delegated-child', '/tmp/visible-project', '\(childRollout.path)', \(updatedAt), 0
+      'delegated-child', '/tmp/visible-project', '\(childRollout.path)',
+      \(childUpdatedAt), \(childUpdatedAt * 1_000), 0
     );
     INSERT INTO thread_spawn_edges VALUES ('visible-root', 'delegated-child');
     """
@@ -104,6 +108,8 @@ import Testing
 
     #expect(threads.map(\.id) == ["visible-root"])
     #expect(threads.first?.cwd.path == "/tmp/visible-project")
+    #expect(Int64(threads.first?.updatedAt.timeIntervalSince1970 ?? 0) == updatedAt)
+    #expect(Int64(threads.first?.projectRecencyAt.timeIntervalSince1970 ?? 0) == childUpdatedAt)
 }
 
 private func rollout(
@@ -120,4 +126,52 @@ private func rollout(
         "{\"timestamp\":\"2026-07-21T01:00:0\(index + 1).000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"\(event)\"}}"
     })
     try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+}
+
+@Test func tailReaderProcessesOnlyBytesAppendedAfterTheCursor() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let initial = String(repeating: "{\"type\":\"response_item\"}\n", count: 20_000)
+    try initial.write(to: url, atomically: true, encoding: .utf8)
+    let initialSize = UInt64(initial.utf8.count)
+    let appended = """
+    {"type":"response_item"}
+    {"timestamp":"2026-07-21T01:00:02.000Z","type":"event_msg","payload":{"type":"task_complete"}}
+
+    """
+    let handle = try FileHandle(forWritingTo: url)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(appended.utf8))
+    try handle.close()
+
+    let update = try RolloutTailReader.readChanges(at: url, from: initialSize)
+
+    #expect(update.bytesRead == appended.utf8.count)
+    #expect(update.processedOffset == initialSize + UInt64(appended.utf8.count))
+    #expect(update.latestEvent?.type == "task_complete")
+}
+
+@Test func tailReaderRetriesAnIncompleteFinalLine() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let firstHalf = "{\"timestamp\":\"2026-07-21T01:00:02.000Z\",\"type\":\"event_msg\","
+    try firstHalf.write(to: url, atomically: true, encoding: .utf8)
+
+    let incomplete = try RolloutTailReader.readChanges(at: url, from: 0)
+    #expect(incomplete.processedOffset == 0)
+    #expect(incomplete.latestEvent == nil)
+
+    let secondHalf = "\"payload\":{\"type\":\"task_started\"}}\n"
+    let handle = try FileHandle(forWritingTo: url)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(secondHalf.utf8))
+    try handle.close()
+
+    let complete = try RolloutTailReader.readChanges(at: url, from: incomplete.processedOffset)
+    #expect(complete.processedOffset == UInt64(firstHalf.utf8.count + secondHalf.utf8.count))
+    #expect(complete.latestEvent?.type == "task_started")
 }

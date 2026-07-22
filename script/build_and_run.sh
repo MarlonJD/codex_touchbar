@@ -7,6 +7,8 @@ DISPLAY_NAME="Codex Touch Bar"
 PROCESS_NAME="$PRODUCT_NAME"
 BUNDLE_ID="dev.marlonjd.CodexTouchBar"
 MIN_SYSTEM_VERSION="13.0"
+DEFAULT_SIGN_IDENTITY="Developer ID Application: Burak Karahan (UPK4SC93AN)"
+SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-$DEFAULT_SIGN_IDENTITY}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -16,7 +18,23 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_BINARY="$APP_MACOS/$PRODUCT_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 
-pkill -x "$PROCESS_NAME" >/dev/null 2>&1 || true
+stop_running_app() {
+  if ! pgrep -x "$PROCESS_NAME" >/dev/null 2>&1; then
+    return
+  fi
+
+  /usr/bin/osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if ! pgrep -x "$PROCESS_NAME" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.2
+  done
+
+  pkill -x "$PROCESS_NAME" >/dev/null 2>&1 || true
+}
+
+stop_running_app
 
 export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/module-cache"
 export SWIFT_MODULE_CACHE_PATH="$ROOT_DIR/.build/module-cache"
@@ -59,10 +77,15 @@ cat >"$INFO_PLIST" <<PLIST
 PLIST
 
 plutil -lint "$INFO_PLIST" >/dev/null
-codesign --force --sign - "$APP_BUNDLE" >/dev/null
+if /usr/bin/security find-identity -v -p codesigning 2>/dev/null | /usr/bin/grep -Fq "\"$SIGN_IDENTITY\""; then
+  codesign --force --options runtime --timestamp=none --sign "$SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null
+else
+  echo "warning: $SIGN_IDENTITY not found; using an unstable ad-hoc signature" >&2
+  codesign --force --sign - "$APP_BUNDLE" >/dev/null
+fi
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  /usr/bin/open "$APP_BUNDLE"
 }
 
 case "$MODE" in

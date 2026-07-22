@@ -38,12 +38,18 @@ let package = Package(
             path: "Sources/CodexTouchBar",
             linkerSettings: [
                 .linkedFramework("ApplicationServices"),
+                .linkedFramework("ServiceManagement"),
             ]
         ),
         .testTarget(
             name: "CodexTouchBarCoreTests",
             dependencies: ["CodexTouchBarCore", "CSQLite"],
             path: "Tests/CodexTouchBarCoreTests"
+        ),
+        .testTarget(
+            name: "CodexTouchBarUITests",
+            dependencies: ["CodexTouchBar"],
+            path: "Tests/CodexTouchBarUITests"
         ),
     ]
 )

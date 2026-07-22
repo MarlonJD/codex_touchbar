@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var enabledMenuItem: NSMenuItem?
     private var refreshTimer: Timer?
     private var refreshInFlight = false
+    private var latestGroups: [ProjectGroup]?
     private var latestGroupCount = 0
     private var latestThreadCount = 0
     private var transientStatus: (message: String, expiresAt: Date)?
@@ -33,8 +34,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let runningPIDs = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Bundle.main.bundleIdentifier ?? ""
+        ).map(\.processIdentifier)
+        if SingleInstancePolicy.shouldTerminate(
+            currentPID: ProcessInfo.processInfo.processIdentifier,
+            runningPIDs: runningPIDs
+        ) {
+            NSApp.terminate(nil)
+            return
+        }
+
         NSApp.setActivationPolicy(.accessory)
         configureStatusItem()
+        LaunchAtLoginController.registerIfNeeded()
 
         touchBarController.onProjectSelected = { [weak self] group in
             self?.openNextThread(in: group)
@@ -53,13 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
-        refreshTimer = Timer.scheduledTimer(
-            timeInterval: 2,
-            target: self,
-            selector: #selector(refreshTimerFired),
-            userInfo: nil,
-            repeats: true
-        )
+        updateRefreshSchedule()
         requestRefresh()
         updatePresentation()
     }
@@ -145,6 +152,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func apply(groups: [ProjectGroup]) {
+        guard RefreshPolicy.shouldApply(previous: latestGroups, next: groups) else {
+            updateStatusText()
+            return
+        }
+        latestGroups = groups
         latestGroupCount = groups.count
         latestThreadCount = groups.reduce(0) { $0 + $1.threads.count }
         cycler.retainGroups(Set(groups.map(\.id)))
@@ -174,12 +186,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updatePresentation() {
-        let codexIsFrontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.codexBundleIdentifier
+        let codexIsFrontmost = isCodexFrontmost
         if isEnabled && codexIsFrontmost && touchBarController.isAvailable {
             _ = touchBarController.present()
         } else {
             touchBarController.dismiss()
         }
+    }
+
+    private var isCodexFrontmost: Bool {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.codexBundleIdentifier
+    }
+
+    private func updateRefreshSchedule() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+
+        guard isEnabled,
+              let interval = RefreshPolicy.pollInterval(codexIsFrontmost: isCodexFrontmost) else {
+            return
+        }
+        refreshTimer = Timer.scheduledTimer(
+            timeInterval: interval,
+            target: self,
+            selector: #selector(refreshTimerFired),
+            userInfo: nil,
+            repeats: true
+        )
     }
 
     private func openNextThread(in group: ProjectGroup) {
@@ -228,6 +261,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func frontmostApplicationChanged(_ notification: Notification) {
+        updateRefreshSchedule()
+        if isEnabled && isCodexFrontmost {
+            requestRefresh()
+        }
         updatePresentation()
     }
 
@@ -243,6 +280,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleEnabled(_ sender: NSMenuItem) {
         isEnabled.toggle()
         sender.state = isEnabled ? .on : .off
+        updateRefreshSchedule()
+        if isEnabled && isCodexFrontmost {
+            requestRefresh()
+        }
         updatePresentation()
     }
 

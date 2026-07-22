@@ -20,9 +20,16 @@ The right side also provides native Touch Bar popovers for the currently visible
 - A MacBook Pro with a physical Touch Bar
 - macOS 13 or later
 - The Codex desktop app installed at `/Applications/ChatGPT.app`
-- Xcode or the Xcode Command Line Tools with Swift 6
 
 This proof of concept has been verified on a MacBook Pro M2 running macOS 26.5.2 and Codex `26.715.52143`.
+
+## Install
+
+1. Download the notarized macOS ZIP from [GitHub Releases](https://github.com/MarlonJD/codex_touchbar/releases).
+2. Extract `Codex Touch Bar.app` and move it to `/Applications`.
+3. Open the app once.
+
+The app registers itself as a macOS login item on first launch so it starts automatically after future sign-ins. It runs as a menu bar helper and only presents its Touch Bar controls while Codex is frontmost.
 
 ## Build and run
 
@@ -32,7 +39,7 @@ cd codex_touchbar
 ./script/build_and_run.sh --verify
 ```
 
-The script builds and ad-hoc signs `dist/Codex Touch Bar.app`, then launches it as a menu bar app. Use the menu bar icon to disable presentation, refresh task discovery, open Codex, or quit.
+Building from source requires Xcode or the Xcode Command Line Tools with Swift 6. The script builds and signs `dist/Codex Touch Bar.app`, then launches it as a menu bar app. It uses the configured Developer ID identity when available and otherwise falls back to an ad-hoc development signature. Use the menu bar icon to disable presentation, refresh task discovery, open Codex, or quit.
 
 The first effort or speed change asks for macOS Accessibility access. Enable **Codex Touch Bar** under **System Settings → Privacy & Security → Accessibility**, return to Codex, and tap the option again. This permission is needed because Codex does not expose a public API for changing these controls in an already-open task.
 
@@ -44,7 +51,13 @@ Optional run modes:
 ./script/build_and_run.sh --telemetry
 ```
 
-To start it automatically, add `dist/Codex Touch Bar.app` under **System Settings → General → Login Items** after the first build.
+Create a notarized release archive with:
+
+```bash
+./script/build_release.sh 0.1.0
+```
+
+The release script requires the Developer ID identity and `desktop-updater-notary` Keychain profile. It signs with hardened runtime, submits the archive to Apple, staples the ticket, validates it with Gatekeeper, and writes the final ZIP under `dist/release`.
 
 ## How it works
 

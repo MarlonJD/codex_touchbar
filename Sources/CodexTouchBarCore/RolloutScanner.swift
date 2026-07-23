@@ -21,10 +21,9 @@ public actor RolloutScanner {
         let weeklyLimit: WeeklyLimitUsage?
     }
 
-    private struct CachedUnreadState {
-        let modificationDate: Date
-        let fileSize: Int
-        let threadIDs: Set<String>
+    private struct GlobalStateValues {
+        let unreadThreadIDs: Set<String>
+        let selectedProjectRoots: [URL]
     }
 
     private struct IndexedThreadRoot {
@@ -40,7 +39,7 @@ public actor RolloutScanner {
     private let globalStateFile: URL?
     private let recentFileInterval: TimeInterval
     private var cache: [URL: CachedRollout] = [:]
-    private var cachedUnreadState: CachedUnreadState?
+    private var lastGlobalStateValues: GlobalStateValues?
 
     public init(
         sessionsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -69,14 +68,14 @@ public actor RolloutScanner {
             .fileSizeKey,
         ]
         let cutoff = Date().addingTimeInterval(-recentFileInterval)
-        let unreadThreadIDs = unreadThreadIDs(fileManager: fileManager)
+        let globalState = globalStateValues(fileManager: fileManager)
+        let unreadThreadIDs = globalState.unreadThreadIDs
         var seenURLs = Set<URL>()
         var weeklyLimits: [WeeklyLimitUsage] = []
         let visibleThreads: [ActiveThread]
 
         if let indexedRoots = indexedThreadRoots() {
             visibleThreads = indexedRoots.compactMap { root in
-                let isUnread = unreadThreadIDs.contains(root.id)
                 let records = root.rolloutURLs.compactMap { url in
                     cachedRecord(
                         at: url,
@@ -89,6 +88,7 @@ public actor RolloutScanner {
                 weeklyLimits.append(contentsOf: records.compactMap(\.weeklyLimit))
                 let activeRecords = records.filter(\.isActive)
                 let activeStartedAt = activeRecords.map(\.thread.startedAt).min()
+                let isUnread = activeStartedAt == nil && unreadThreadIDs.contains(root.id)
 
                 guard activeStartedAt != nil || isUnread else {
                     return nil
@@ -118,7 +118,7 @@ public actor RolloutScanner {
                 if let weeklyLimit = record.weeklyLimit {
                     weeklyLimits.append(weeklyLimit)
                 }
-                let isUnread = unreadThreadIDs.contains(record.thread.id)
+                let isUnread = !record.isActive && unreadThreadIDs.contains(record.thread.id)
                 guard record.isActive || isUnread else {
                     continue
                 }
@@ -152,41 +152,47 @@ public actor RolloutScanner {
         let latestWeeklyLimit = weeklyLimits.max {
             $0.recordedAt < $1.recordedAt
         }
-        return RolloutSnapshot(threads: sortedThreads, weeklyLimit: latestWeeklyLimit)
+        return RolloutSnapshot(
+            threads: sortedThreads,
+            weeklyLimit: latestWeeklyLimit,
+            selectedProjectRoots: globalState.selectedProjectRoots
+        )
     }
 
-    private func unreadThreadIDs(fileManager: FileManager) -> Set<String> {
-        guard let globalStateFile,
-              let values = try? globalStateFile.resourceValues(
-                  forKeys: [.contentModificationDateKey, .fileSizeKey]
-              ),
-              let modificationDate = values.contentModificationDate else {
-            return cachedUnreadState?.threadIDs ?? []
-        }
-
-        let fileSize = values.fileSize ?? 0
-        if let cachedUnreadState,
-           cachedUnreadState.modificationDate == modificationDate,
-           cachedUnreadState.fileSize == fileSize {
-            return cachedUnreadState.threadIDs
-        }
-
-        guard let data = fileManager.contents(atPath: globalStateFile.path),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let root = object as? [String: Any],
-              let atomState = root["electron-persisted-atom-state"] as? [String: Any],
-              let unreadByHost = atomState["unread-thread-ids-by-host-v1"] as? [String: Any],
-              let localThreadIDs = unreadByHost["local"] as? [String] else {
-            return cachedUnreadState?.threadIDs ?? []
-        }
-
-        let threadIDs = Set(localThreadIDs)
-        cachedUnreadState = CachedUnreadState(
-            modificationDate: modificationDate,
-            fileSize: fileSize,
-            threadIDs: threadIDs
+    private func globalStateValues(fileManager: FileManager) -> GlobalStateValues {
+        let emptyValues = GlobalStateValues(
+            unreadThreadIDs: [],
+            selectedProjectRoots: []
         )
-        return threadIDs
+        guard let globalStateFile,
+              let data = fileManager.contents(atPath: globalStateFile.path),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let root = object as? [String: Any] else {
+            return lastGlobalStateValues ?? emptyValues
+        }
+
+        let atomState = root["electron-persisted-atom-state"] as? [String: Any]
+        let unreadByHost = atomState?["unread-thread-ids-by-host-v1"] as? [String: Any]
+        let unreadThreadIDs = Set(unreadByHost?["local"] as? [String] ?? [])
+
+        var selectedProjectRoots: [URL] = []
+        if let selectedProject = root["selected-project"] as? [String: Any],
+           selectedProject["type"] as? String == "local",
+           let projectID = selectedProject["projectId"] as? String,
+           let localProjects = root["local-projects"] as? [String: Any],
+           let localProject = localProjects[projectID] as? [String: Any],
+           let rootPaths = localProject["rootPaths"] as? [String] {
+            selectedProjectRoots = rootPaths
+                .map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+                .sorted { $0.path < $1.path }
+        }
+
+        let stateValues = GlobalStateValues(
+            unreadThreadIDs: unreadThreadIDs,
+            selectedProjectRoots: selectedProjectRoots
+        )
+        lastGlobalStateValues = stateValues
+        return stateValues
     }
 
     private func cachedRecord(

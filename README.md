@@ -5,11 +5,12 @@ A standalone macOS menu bar helper that shows projects with active Codex tasks o
 When Codex is the frontmost app, the Touch Bar shows a horizontally scrollable project strip:
 
 ```text
-[folder] aviaSurveil360 · 2   [folder] flutter_desktop_up…   [folder] Unnamed Project
+[folder] aviaSurveil360 · 2   [folder] flutter_desktop_up…   [folder] Görevler
 ```
 
 Tapping a project opens unread results first, then cycles through that project's active tasks and wraps back to the first one.
 Projects with an unread Codex result are highlighted in purple with a dot.
+The project selected in the active Codex window is highlighted in yellow with a leading arrow.
 
 The right side shows the remaining weekly Codex allowance and provides native Touch Bar popovers for the currently visible task:
 
@@ -56,7 +57,7 @@ Optional run modes:
 Create a notarized release archive with:
 
 ```bash
-./script/build_release.sh 0.2.1
+./script/build_release.sh 0.2.3
 ```
 
 The release script requires the Developer ID identity and `desktop-updater-notary` Keychain profile. It signs with hardened runtime, submits the archive to Apple, staples the ticket, validates it with Gatekeeper, and writes the final ZIP under `dist/release`.
@@ -67,7 +68,7 @@ The release script requires the Developer ID identity and `desktop-updater-notar
 - Checks only task lifecycle fields and weekly rate-limit metadata in recent rollout JSONL files. Prompt and response text is not used.
 - Reads Codex's local unread-thread IDs to highlight active projects that need attention.
 - Treats a task as active when its latest lifecycle event is `task_started`, unless followed by `task_complete` or `turn_aborted`.
-- Groups tasks by their nearest Git repository; Codex scratch directories appear as `Unnamed Project`.
+- Groups tasks by their nearest Git repository; Codex scratch directories appear as `Görevler`.
 - Opens tasks through the native `codex://threads/<id>` deep link.
 - Uses an `NSScrubber` for native horizontal Touch Bar scrolling.
 - Changes effort and speed by operating only the matching accessibility controls in the frontmost Codex window. It fails closed when it cannot identify a control or option.

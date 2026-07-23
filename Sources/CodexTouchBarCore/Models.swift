@@ -19,10 +19,16 @@ public struct WeeklyLimitUsage: Equatable, Sendable {
 public struct RolloutSnapshot: Equatable, Sendable {
     public let threads: [ActiveThread]
     public let weeklyLimit: WeeklyLimitUsage?
+    public let selectedProjectRoots: [URL]
 
-    public init(threads: [ActiveThread], weeklyLimit: WeeklyLimitUsage?) {
+    public init(
+        threads: [ActiveThread],
+        weeklyLimit: WeeklyLimitUsage?,
+        selectedProjectRoots: [URL] = []
+    ) {
         self.threads = threads
         self.weeklyLimit = weeklyLimit
+        self.selectedProjectRoots = selectedProjectRoots
     }
 }
 
@@ -60,19 +66,22 @@ public struct ProjectGroup: Equatable, Sendable, Identifiable {
     public let threads: [ActiveThread]
     public let isUnnamed: Bool
     public let hasUnread: Bool
+    public let isSelected: Bool
 
     public init(
         id: String,
         name: String,
         threads: [ActiveThread],
         isUnnamed: Bool,
-        hasUnread: Bool = false
+        hasUnread: Bool = false,
+        isSelected: Bool = false
     ) {
         self.id = id
         self.name = name
         self.threads = threads
         self.isUnnamed = isUnnamed
         self.hasUnread = hasUnread
+        self.isSelected = isSelected
     }
 
     public func displayName(maxLength: Int = 20) -> String {

@@ -26,7 +26,7 @@ import Testing
     let grouper = ProjectGrouper(scratchRoot: scratchRoot, homeDirectory: root)
     let groups = grouper.groups(from: threads)
 
-    #expect(groups.map(\.name) == ["AviaSurveil360", "Unnamed Project"])
+    #expect(groups.map(\.name) == ["AviaSurveil360", "Görevler"])
     #expect(groups[0].threads.map(\.id) == ["avia-2", "avia-1"])
     #expect(groups[0].hasUnread)
     #expect(!groups[1].hasUnread)
@@ -66,6 +66,102 @@ import Testing
     let grouper = ProjectGrouper(homeDirectory: root)
 
     #expect(grouper.groups(from: threads).map(\.name) == ["unread", "active"])
+}
+
+@Test func selectedProjectSortsBeforeUnreadAndOtherProjects() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let unreadProject = root.appendingPathComponent("unread", isDirectory: true)
+    let selectedProject = root.appendingPathComponent("selected", isDirectory: true)
+    let otherProject = root.appendingPathComponent("other", isDirectory: true)
+    for repository in [unreadProject, selectedProject, otherProject] {
+        try FileManager.default.createDirectory(
+            at: repository.appendingPathComponent(".git", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+
+    let threads = [
+        makeThread(
+            id: "other",
+            cwd: otherProject,
+            startedAt: 3,
+            projectRecencyAt: 30
+        ),
+        makeThread(
+            id: "selected",
+            cwd: selectedProject,
+            startedAt: 2,
+            projectRecencyAt: 20
+        ),
+        makeThread(
+            id: "unread",
+            cwd: unreadProject,
+            startedAt: 1,
+            projectRecencyAt: 10,
+            isActive: false,
+            isUnread: true
+        ),
+    ]
+    let grouper = ProjectGrouper(homeDirectory: root)
+    let groups = grouper.groups(
+        from: threads,
+        selectedProjectRoots: [selectedProject]
+    )
+
+    #expect(groups.map(\.name) == ["selected", "unread", "other"])
+    #expect(groups.map(\.isSelected) == [true, false, false])
+}
+
+@Test func selectedProjectIsShownEvenWhenItHasNoActiveThread() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let selectedProject = root.appendingPathComponent("selected", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: selectedProject.appendingPathComponent(".git", isDirectory: true),
+        withIntermediateDirectories: true
+    )
+
+    let grouper = ProjectGrouper(homeDirectory: root)
+    let groups = grouper.groups(
+        from: [],
+        selectedProjectRoots: [selectedProject]
+    )
+
+    #expect(groups.map(\.name) == ["selected"])
+    #expect(groups.first?.isSelected == true)
+    #expect(groups.first?.threads.isEmpty == true)
+}
+
+@Test func visibleSidebarSelectionOverridesAStalePersistedProject() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let staleProject = root.appendingPathComponent("codex_touchbar", isDirectory: true)
+    let visibleProject = root.appendingPathComponent("aviaCore", isDirectory: true)
+    for repository in [staleProject, visibleProject] {
+        try FileManager.default.createDirectory(
+            at: repository.appendingPathComponent(".git", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+
+    let groups = ProjectGrouper(homeDirectory: root).groups(
+        from: [
+            makeThread(id: "stale", cwd: staleProject, startedAt: 1),
+            makeThread(id: "visible", cwd: visibleProject, startedAt: 2),
+        ],
+        selectedProjectRoots: [staleProject],
+        selectedProjectName: "aviaCore"
+    )
+
+    #expect(groups.map(\.name) == ["aviaCore", "codex_touchbar"])
+    #expect(groups.map(\.isSelected) == [true, false])
 }
 
 @Test func ordersProjectGroupsByCodexProjectRecency() throws {

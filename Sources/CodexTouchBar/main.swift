@@ -23,13 +23,24 @@ private func runDiagnostics() {
             print("Weekly limit\tUnavailable")
         }
         print("Unread threads\t\(snapshot.threads.filter(\.isUnread).count)")
+        let selectedProjects = snapshot.selectedProjectRoots.map(\.lastPathComponent)
+        print("Selected projects\t\(selectedProjects.joined(separator: ","))")
 
-        let groups = grouper.groups(from: snapshot.threads)
+        let groups = grouper.groups(
+            from: snapshot.threads,
+            selectedProjectRoots: snapshot.selectedProjectRoots
+        )
         if groups.isEmpty {
             print("No active Codex tasks")
         } else {
             for group in groups {
-                print("\(group.name)\t\(group.threads.count)\t\(group.threads.map(\.id).joined(separator: ","))")
+                let state = [
+                    group.hasUnread ? "unread" : nil,
+                    group.isSelected ? "selected" : nil,
+                ]
+                .compactMap { $0 }
+                .joined(separator: ",")
+                print("\(group.name)\t\(group.threads.count)\t\(state)\t\(group.threads.map(\.id).joined(separator: ","))")
             }
         }
         exit(EXIT_SUCCESS)

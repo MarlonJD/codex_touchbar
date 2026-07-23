@@ -1,8 +1,8 @@
 import CodexTouchBarCore
 import Testing
 
-@Test func electronAccessibilityUsesTheSupportedEnhancedUIAttribute() {
-    #expect(AccessibilityRuntimePolicy.activationAttribute == "AXEnhancedUserInterface")
+@Test func electronAccessibilityUsesTheSupportedManualAccessibilityAttribute() {
+    #expect(AccessibilityRuntimePolicy.activationAttribute == "AXManualAccessibility")
 }
 
 @Test func electronAccessibilityTraversesNavigationAndSectionChildren() {
@@ -11,4 +11,8 @@ import Testing
         "AXChildrenInNavigationOrder",
         "AXSections",
     ])
+}
+
+@Test func electronAccessibilityReachesNestedSidebarTaskIndicators() {
+    #expect(AccessibilityRuntimePolicy.maximumTraversalDepth >= 24)
 }

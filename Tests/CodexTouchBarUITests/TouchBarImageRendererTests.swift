@@ -44,6 +44,30 @@ import Testing
     )
 }
 
+@MainActor
+@Test func selectedProjectTitleIncludesALeadingMarker() {
+    #expect(
+        ProjectScrubberItemView.displayTitle(
+            title: "codex_touchbar",
+            count: 1,
+            hasUnread: false,
+            isSelected: true
+        ) == "▶ codex_touchbar"
+    )
+}
+
+@MainActor
+@Test func selectedUnreadProjectKeepsBothCurrentAndAttentionMarkers() {
+    #expect(
+        ProjectScrubberItemView.displayTitle(
+            title: "codex_touchbar",
+            count: 1,
+            hasUnread: true,
+            isSelected: true
+        ) == "▶ codex_touchbar ●"
+    )
+}
+
 @Test func effortChoicesMatchCodexWhileUltraTargetsTheHiddenMaxStep() {
     #expect(EffortChoice.allCases.map(\.rawValue) == [
         "low",

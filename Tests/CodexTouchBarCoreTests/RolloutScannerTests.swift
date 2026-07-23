@@ -118,6 +118,79 @@ import Testing
     #expect(Int64(threads.first?.projectRecencyAt.timeIntervalSince1970 ?? 0) == childUpdatedAt)
 }
 
+@Test func doesNotMapAnUnreadDelegatedTaskToItsVisibleRoot() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+    let rootRollout = root.appendingPathComponent("root.jsonl")
+    let childRollout = root.appendingPathComponent("child.jsonl")
+    try rollout(
+        id: "visible-root",
+        cwd: "/tmp/visible-project",
+        events: ["task_started", "task_complete"],
+        at: rootRollout
+    )
+    try rollout(
+        id: "delegated-child",
+        cwd: "/tmp/visible-project",
+        threadSource: "subagent",
+        events: ["task_started", "task_complete"],
+        at: childRollout
+    )
+
+    let databaseURL = root.appendingPathComponent("state.sqlite")
+    var database: OpaquePointer?
+    #expect(sqlite3_open(databaseURL.path, &database) == SQLITE_OK)
+    guard let database else {
+        return
+    }
+    defer { sqlite3_close(database) }
+
+    let updatedAt = Int64(Date().addingTimeInterval(-10).timeIntervalSince1970)
+    let sql = """
+    CREATE TABLE threads (
+      id TEXT PRIMARY KEY,
+      cwd TEXT NOT NULL,
+      rollout_path TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      recency_at_ms INTEGER NOT NULL,
+      archived INTEGER NOT NULL
+    );
+    CREATE TABLE thread_spawn_edges (
+      parent_thread_id TEXT NOT NULL,
+      child_thread_id TEXT NOT NULL
+    );
+    INSERT INTO threads VALUES (
+      'visible-root', '/tmp/visible-project', '\(rootRollout.path)',
+      \(updatedAt), \(updatedAt * 1_000), 0
+    );
+    INSERT INTO threads VALUES (
+      'delegated-child', '/tmp/visible-project', '\(childRollout.path)',
+      \(updatedAt), \(updatedAt * 1_000), 0
+    );
+    INSERT INTO thread_spawn_edges VALUES ('visible-root', 'delegated-child');
+    """
+    #expect(sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK)
+
+    let globalStateFile = root.appendingPathComponent("global-state.json")
+    let globalState = """
+    {"electron-persisted-atom-state":{"unread-thread-ids-by-host-v1":{"local":["delegated-child"]}}}
+    """
+    try globalState.write(to: globalStateFile, atomically: true, encoding: .utf8)
+
+    let scanner = RolloutScanner(
+        sessionsRoot: root,
+        stateDatabase: databaseURL,
+        globalStateFile: globalStateFile,
+        recentFileInterval: 60
+    )
+    let snapshot = await scanner.scanSnapshot()
+
+    #expect(snapshot.threads.isEmpty)
+}
+
 @Test func reportsTheLatestWeeklyLimitAcrossOldAndNewRateLimitShapes() async throws {
     let sessionsRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -182,7 +255,7 @@ import Testing
 
     let globalStateFile = root.appendingPathComponent("global-state.json")
     let globalState = """
-    {"electron-persisted-atom-state":{"unread-thread-ids-by-host-v1":{"local":["unread-completed-thread"]}}}
+    {"electron-persisted-atom-state":{"unread-thread-ids-by-host-v1":{"local":["active-thread","unread-completed-thread"]}}}
     """
     try globalState.write(to: globalStateFile, atomically: true, encoding: .utf8)
 
@@ -199,6 +272,99 @@ import Testing
     #expect(snapshot.threads.first { $0.id == "active-thread" }?.isUnread == false)
     #expect(snapshot.threads.first { $0.id == "unread-completed-thread" }?.isActive == false)
     #expect(snapshot.threads.first { $0.id == "unread-completed-thread" }?.isUnread == true)
+}
+
+@Test func reloadsUnreadIDsWhenGlobalStateContentsChangeWithoutMetadataChange() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+    let unreadThreadID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    let unrelatedThreadID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    try rollout(
+        id: unreadThreadID,
+        cwd: "/tmp/unread-project",
+        events: ["task_started", "task_complete"],
+        at: root.appendingPathComponent("completed.jsonl")
+    )
+
+    let globalStateFile = root.appendingPathComponent("global-state.json")
+    func writeUnreadID(_ id: String) throws {
+        let globalState = """
+        {"electron-persisted-atom-state":{"unread-thread-ids-by-host-v1":{"local":["\(id)"]}}}
+        """
+        try globalState.write(to: globalStateFile, atomically: true, encoding: .utf8)
+    }
+
+    try writeUnreadID(unrelatedThreadID)
+    let stableModificationDate = Date(timeIntervalSince1970: 1_700_000_000)
+    try FileManager.default.setAttributes(
+        [.modificationDate: stableModificationDate],
+        ofItemAtPath: globalStateFile.path
+    )
+    let initialAttributes = try FileManager.default.attributesOfItem(atPath: globalStateFile.path)
+    let initialModificationDate = try #require(initialAttributes[.modificationDate] as? Date)
+    let initialSize = try #require(initialAttributes[.size] as? NSNumber)
+
+    let scanner = RolloutScanner(
+        sessionsRoot: root,
+        stateDatabase: nil,
+        globalStateFile: globalStateFile,
+        recentFileInterval: 60
+    )
+    #expect(await scanner.scan().isEmpty)
+
+    try writeUnreadID(unreadThreadID)
+    try FileManager.default.setAttributes(
+        [.modificationDate: initialModificationDate],
+        ofItemAtPath: globalStateFile.path
+    )
+    let changedAttributes = try FileManager.default.attributesOfItem(atPath: globalStateFile.path)
+    let changedModificationDate = try #require(changedAttributes[.modificationDate] as? Date)
+    #expect(changedAttributes[.size] as? NSNumber == initialSize)
+    #expect(abs(changedModificationDate.timeIntervalSince(initialModificationDate)) < 0.001)
+
+    let threads = await scanner.scan()
+
+    #expect(threads.map(\.id) == [unreadThreadID])
+    #expect(threads.first?.isUnread == true)
+}
+
+@Test func reportsTheSelectedLocalProjectRoots() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+    let selectedRoot = root.appendingPathComponent("selected-project", isDirectory: true)
+    let globalStateFile = root.appendingPathComponent("global-state.json")
+    let globalState = """
+    {
+      "selected-project":{"type":"local","projectId":"selected-id"},
+      "local-projects":{
+        "selected-id":{
+          "id":"selected-id",
+          "name":"selected-project",
+          "rootPaths":["\(selectedRoot.path)"]
+        }
+      },
+      "electron-persisted-atom-state":{
+        "unread-thread-ids-by-host-v1":{"local":[]}
+      }
+    }
+    """
+    try globalState.write(to: globalStateFile, atomically: true, encoding: .utf8)
+
+    let scanner = RolloutScanner(
+        sessionsRoot: root,
+        stateDatabase: nil,
+        globalStateFile: globalStateFile,
+        recentFileInterval: 60
+    )
+    let snapshot = await scanner.scanSnapshot()
+
+    #expect(snapshot.selectedProjectRoots.map(\.path) == [selectedRoot.path])
 }
 
 @Test func weeklyLimitRemainingPercentageIsRoundedAndClamped() {

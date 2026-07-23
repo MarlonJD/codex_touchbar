@@ -147,7 +147,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else {
                 return
             }
-            let groups = grouper.groups(from: snapshot.threads)
+            let selectedProjectName = self.isCodexFrontmost
+                ? self.accessibilityController.selectedSidebarProjectName()
+                : nil
+            let groups = grouper.groups(
+                from: snapshot.threads,
+                selectedProjectRoots: snapshot.selectedProjectRoots,
+                selectedProjectName: selectedProjectName
+            )
             self.apply(groups: groups, weeklyLimit: snapshot.weeklyLimit)
             self.refreshInFlight = false
         }
@@ -219,13 +226,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let interval = RefreshPolicy.pollInterval(codexIsFrontmost: isCodexFrontmost) else {
             return
         }
-        refreshTimer = Timer.scheduledTimer(
+        let timer = Timer(
             timeInterval: interval,
             target: self,
             selector: #selector(refreshTimerFired),
             userInfo: nil,
             repeats: true
         )
+        RunLoop.main.add(timer, forMode: RefreshPolicy.timerRunLoopMode)
+        refreshTimer = timer
     }
 
     private func openNextThread(in group: ProjectGroup) {

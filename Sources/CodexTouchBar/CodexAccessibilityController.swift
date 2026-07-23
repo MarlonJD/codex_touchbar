@@ -68,6 +68,48 @@ final class CodexAccessibilityController {
         return AXIsProcessTrustedWithOptions(options)
     }
 
+    func selectedSidebarProjectName() -> String? {
+        guard AXIsProcessTrusted(),
+              let application = NSRunningApplication.runningApplications(
+                  withBundleIdentifier: Self.codexBundleIdentifier
+              ).first else {
+            return nil
+        }
+
+        let root = AXUIElementCreateApplication(application.processIdentifier)
+        _ = enableEnhancedAccessibility(for: root)
+        let rows = accessibilityElements(in: root, sidebarOnly: true).compactMap {
+            snapshot -> SidebarSelectionRow? in
+            guard snapshot.role == (kAXButtonRole as String),
+                  let frame = rectAttribute("AXFrame", of: snapshot.element),
+                  frame.minX < 20 else {
+                return nil
+            }
+
+            let classes = stringListAttribute("AXDOMClassList", of: snapshot.element)
+            if classes.contains("group/folder-row"), !snapshot.rawText.isEmpty {
+                if classes.contains("bg-token-list-hover-background") {
+                    return .selectedProject(
+                        name: snapshot.rawText,
+                        minY: frame.minY,
+                        height: frame.height
+                    )
+                } else {
+                    return .project(
+                        name: snapshot.rawText,
+                        minY: frame.minY,
+                        height: frame.height
+                    )
+                }
+            }
+            if classes.contains("bg-token-list-hover-background") {
+                return .selectedTask(minY: frame.minY, height: frame.height)
+            }
+            return nil
+        }
+        return SidebarSelectionResolver.projectName(from: rows)
+    }
+
     func apply(effort choice: EffortChoice) async throws {
         try prepareCommandBridge()
         let commands = CodexCommandPlan.effort(
@@ -234,10 +276,17 @@ final class CodexAccessibilityController {
         lines.append(contentsOf: accessibilityElements(in: root)
             .compactMap { snapshot -> String? in
                 let actions = actionNames(of: snapshot.element)
-                guard !actions.isEmpty || keywords.contains(where: snapshot.text.contains) else {
+                let frame = rectAttribute("AXFrame", of: snapshot.element)
+                let isInSidebar = frame.map { $0.minX < 650 } ?? false
+                guard isInSidebar || keywords.contains(where: snapshot.text.contains) else {
                     return nil
                 }
-                return "role=\(snapshot.role) actions=\(actions.joined(separator: ",")) text=\(snapshot.text)"
+                let classes = stringListAttribute("AXDOMClassList", of: snapshot.element)
+                let selected = booleanAttribute(kAXSelectedAttribute, of: snapshot.element)
+                let frameText = frame.map {
+                    "\(Int($0.minX)),\(Int($0.minY)),\(Int($0.width)),\(Int($0.height))"
+                } ?? "-"
+                return "depth=\(snapshot.depth) role=\(snapshot.role) selected=\(selected) frame=\(frameText) classes=\(classes.joined(separator: ",")) actions=\(actions.joined(separator: ",")) text=\(snapshot.text)"
             })
         return lines
     }
@@ -278,7 +327,9 @@ final class CodexAccessibilityController {
 
     private struct ElementSnapshot {
         let element: AXUIElement
+        let depth: Int
         let role: String
+        let rawText: String
         let text: String
         let canPress: Bool
     }
@@ -291,7 +342,10 @@ final class CodexAccessibilityController {
         )
     }
 
-    private func accessibilityElements(in application: AXUIElement) -> [ElementSnapshot] {
+    private func accessibilityElements(
+        in application: AXUIElement,
+        sidebarOnly: Bool = false
+    ) -> [ElementSnapshot] {
         let roots: [AXUIElement]
         if let focusedWindow = attribute(kAXFocusedWindowAttribute, of: application),
            CFGetTypeID(focusedWindow) == AXUIElementGetTypeID() {
@@ -330,13 +384,21 @@ final class CodexAccessibilityController {
             result.append(
                 ElementSnapshot(
                     element: element,
+                    depth: depth,
                     role: role,
+                    rawText: text,
                     text: normalized(text),
                     canPress: actions.contains(kAXPressAction as String)
                 )
             )
 
-            guard depth < 20 else {
+            guard depth < AccessibilityRuntimePolicy.maximumTraversalDepth else {
+                continue
+            }
+            if sidebarOnly,
+               depth >= 12,
+               let frame = rectAttribute("AXFrame", of: element),
+               frame.minX >= 300 {
                 continue
             }
             for childAttribute in AccessibilityRuntimePolicy.childAttributeNames {
@@ -421,6 +483,30 @@ final class CodexAccessibilityController {
             return string
         }
         return ""
+    }
+
+    private func stringListAttribute(_ name: String, of element: AXUIElement) -> [String] {
+        attribute(name, of: element) as? [String] ?? []
+    }
+
+    private func booleanAttribute(_ name: String, of element: AXUIElement) -> Bool {
+        attribute(name, of: element) as? Bool ?? false
+    }
+
+    private func rectAttribute(_ name: String, of element: AXUIElement) -> CGRect? {
+        guard let value = attribute(name, of: element),
+              CFGetTypeID(value) == AXValueGetTypeID() else {
+            return nil
+        }
+        var rect = CGRect.zero
+        guard AXValueGetValue(
+            unsafeDowncast(value, to: AXValue.self),
+            .cgRect,
+            &rect
+        ) else {
+            return nil
+        }
+        return rect
     }
 
     private func actionNames(of element: AXUIElement) -> [String] {

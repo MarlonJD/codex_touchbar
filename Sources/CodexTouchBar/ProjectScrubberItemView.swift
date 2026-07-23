@@ -17,26 +17,32 @@ final class ProjectScrubberItemView: NSScrubberItemView {
     static func displayTitle(
         title: String,
         count: Int,
-        hasUnread: Bool
+        hasUnread: Bool,
+        isSelected: Bool = false
     ) -> String {
         let countedTitle = count > 1 ? "\(title) · \(count)" : title
-        return hasUnread ? "\(countedTitle) ●" : countedTitle
+        let selectedTitle = isSelected ? "▶ \(countedTitle)" : countedTitle
+        return hasUnread ? "\(selectedTitle) ●" : selectedTitle
     }
 
     func configure(
         title: String,
         count: Int,
         hasUnread: Bool = false,
+        isSelected: Bool = false,
         isPlaceholder: Bool = false
     ) {
         let displayTitle = Self.displayTitle(
             title: title,
             count: count,
-            hasUnread: hasUnread
+            hasUnread: hasUnread,
+            isSelected: isSelected
         )
         let textColor: NSColor
         if isPlaceholder {
             textColor = NSColor.white.withAlphaComponent(0.6)
+        } else if isSelected {
+            textColor = .systemYellow
         } else if hasUnread {
             textColor = .systemPurple
         } else {
@@ -48,9 +54,14 @@ final class ProjectScrubberItemView: NSScrubberItemView {
             font: .systemFont(ofSize: 12, weight: .medium),
             textColor: textColor
         )
-        setAccessibilityLabel(
-            hasUnread ? "\(displayTitle), unread result available" : displayTitle
-        )
+        var accessibilityLabel = displayTitle
+        if isSelected {
+            accessibilityLabel += ", current project"
+        }
+        if hasUnread {
+            accessibilityLabel += ", unread result available"
+        }
+        setAccessibilityLabel(accessibilityLabel)
     }
 
     private func configureView() {

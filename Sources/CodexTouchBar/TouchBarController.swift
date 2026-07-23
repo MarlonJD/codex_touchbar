@@ -82,6 +82,11 @@ final class TouchBarController: NSObject {
     func update(groups: [ProjectGroup]) {
         self.groups = groups
         scrubber.reloadData()
+        if groups.first?.hasUnread == true || groups.first?.isSelected == true {
+            DispatchQueue.main.async { [weak self] in
+                self?.scrubber.scrollItem(at: 0, to: .leading)
+            }
+        }
         enforceCloseBoxVisibility()
     }
 
@@ -432,7 +437,8 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
             view.configure(
                 title: group.displayName(),
                 count: group.threads.count,
-                hasUnread: group.hasUnread
+                hasUnread: group.hasUnread,
+                isSelected: group.isSelected
             )
         }
         return view
@@ -451,7 +457,8 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
             title = ProjectScrubberItemView.displayTitle(
                 title: group.displayName(),
                 count: group.threads.count,
-                hasUnread: group.hasUnread
+                hasUnread: group.hasUnread,
+                isSelected: group.isSelected
             )
         }
 

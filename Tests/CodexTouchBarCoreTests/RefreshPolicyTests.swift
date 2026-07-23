@@ -4,7 +4,11 @@ import Testing
 
 @Test func refreshPolicyPollsOnlyWhileCodexIsFrontmost() {
     #expect(RefreshPolicy.pollInterval(codexIsFrontmost: false) == nil)
-    #expect(RefreshPolicy.pollInterval(codexIsFrontmost: true) == 5)
+    #expect(RefreshPolicy.pollInterval(codexIsFrontmost: true) == 1)
+}
+
+@Test func refreshTimerRunsDuringTouchBarEventTracking() {
+    #expect(RefreshPolicy.timerRunLoopMode == .common)
 }
 
 @Test func refreshPolicySkipsAnUnchangedTouchBarModel() {

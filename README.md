@@ -57,7 +57,7 @@ Optional run modes:
 Create a notarized release archive with:
 
 ```bash
-./script/build_release.sh 0.2.3
+./script/build_release.sh 0.2.4
 ```
 
 The release script requires the Developer ID identity and `desktop-updater-notary` Keychain profile. It signs with hardened runtime, submits the archive to Apple, staples the ticket, validates it with Gatekeeper, and writes the final ZIP under `dist/release`.

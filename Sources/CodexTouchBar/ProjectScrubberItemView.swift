@@ -14,15 +14,43 @@ final class ProjectScrubberItemView: NSScrubberItemView {
         configureView()
     }
 
-    func configure(title: String, count: Int, isPlaceholder: Bool = false) {
-        let displayTitle = count > 1 ? "\(title) · \(count)" : title
+    static func displayTitle(
+        title: String,
+        count: Int,
+        hasUnread: Bool
+    ) -> String {
+        let countedTitle = count > 1 ? "\(title) · \(count)" : title
+        return hasUnread ? "\(countedTitle) ●" : countedTitle
+    }
+
+    func configure(
+        title: String,
+        count: Int,
+        hasUnread: Bool = false,
+        isPlaceholder: Bool = false
+    ) {
+        let displayTitle = Self.displayTitle(
+            title: title,
+            count: count,
+            hasUnread: hasUnread
+        )
+        let textColor: NSColor
+        if isPlaceholder {
+            textColor = NSColor.white.withAlphaComponent(0.6)
+        } else if hasUnread {
+            textColor = .systemPurple
+        } else {
+            textColor = .white
+        }
         contentView.image = TouchBarImageRenderer.image(
             title: displayTitle,
             symbolName: isPlaceholder ? "pause.circle" : "folder.fill",
             font: .systemFont(ofSize: 12, weight: .medium),
-            textColor: isPlaceholder ? NSColor.white.withAlphaComponent(0.6) : .white
+            textColor: textColor
         )
-        setAccessibilityLabel(displayTitle)
+        setAccessibilityLabel(
+            hasUnread ? "\(displayTitle), unread result available" : displayTitle
+        )
     }
 
     private func configureView() {

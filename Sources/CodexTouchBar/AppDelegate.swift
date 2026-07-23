@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var refreshTimer: Timer?
     private var refreshInFlight = false
     private var latestGroups: [ProjectGroup]?
+    private var latestWeeklyLimit: WeeklyLimitUsage?
     private var latestGroupCount = 0
     private var latestThreadCount = 0
     private var transientStatus: (message: String, expiresAt: Date)?
@@ -141,26 +142,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshInFlight = true
 
         Task { [weak self, scanner, grouper] in
-            let threads = await scanner.scan()
+            let snapshot = await scanner.scanSnapshot()
             guard let self else {
                 return
             }
-            let groups = grouper.groups(from: threads)
-            self.apply(groups: groups)
+            let groups = grouper.groups(
+                from: snapshot.threads,
+                unreadWorkingDirectories: snapshot.unreadWorkingDirectories
+            )
+            self.apply(groups: groups, weeklyLimit: snapshot.weeklyLimit)
             self.refreshInFlight = false
         }
     }
 
-    private func apply(groups: [ProjectGroup]) {
-        guard RefreshPolicy.shouldApply(previous: latestGroups, next: groups) else {
-            updateStatusText()
-            return
+    private func apply(groups: [ProjectGroup], weeklyLimit: WeeklyLimitUsage?) {
+        if RefreshPolicy.shouldApply(previous: latestGroups, next: groups) {
+            latestGroups = groups
+            latestGroupCount = groups.count
+            latestThreadCount = groups.reduce(0) { $0 + $1.threads.count }
+            cycler.retainGroups(Set(groups.map(\.id)))
+            touchBarController.update(groups: groups)
         }
-        latestGroups = groups
-        latestGroupCount = groups.count
-        latestThreadCount = groups.reduce(0) { $0 + $1.threads.count }
-        cycler.retainGroups(Set(groups.map(\.id)))
-        touchBarController.update(groups: groups)
+
+        if latestWeeklyLimit != weeklyLimit {
+            latestWeeklyLimit = weeklyLimit
+            touchBarController.showWeeklyLimit(weeklyLimit)
+        }
         updateStatusText()
     }
 

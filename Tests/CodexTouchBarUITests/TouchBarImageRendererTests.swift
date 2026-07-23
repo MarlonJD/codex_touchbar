@@ -22,6 +22,28 @@ import Testing
     #expect(image.size.height >= 16)
 }
 
+@MainActor
+@Test func imageRendererDrawsTheWeeklyLimitWithAnIcon() {
+    let image = TouchBarImageRenderer.image(
+        title: "%94 kaldı",
+        symbolName: "calendar"
+    )
+
+    #expect(image.size.width > 70)
+    #expect(image.size.height >= 16)
+}
+
+@MainActor
+@Test func unreadProjectTitleIncludesAnAttentionDot() {
+    #expect(
+        ProjectScrubberItemView.displayTitle(
+            title: "aviaSurveil360",
+            count: 2,
+            hasUnread: true
+        ) == "aviaSurveil360 · 2 ●"
+    )
+}
+
 @Test func effortChoicesMatchCodexWhileUltraTargetsTheHiddenMaxStep() {
     #expect(EffortChoice.allCases.map(\.rawValue) == [
         "low",

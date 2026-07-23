@@ -24,10 +24,15 @@ import Testing
         makeThread(id: "avia-1", cwd: repositoryRoot, startedAt: 1),
     ]
     let grouper = ProjectGrouper(scratchRoot: scratchRoot, homeDirectory: root)
-    let groups = grouper.groups(from: threads)
+    let groups = grouper.groups(
+        from: threads,
+        unreadWorkingDirectories: [repositoryChild]
+    )
 
     #expect(groups.map(\.name) == ["AviaSurveil360", "Unnamed Project"])
     #expect(groups[0].threads.map(\.id) == ["avia-1", "avia-2"])
+    #expect(groups[0].hasUnread)
+    #expect(!groups[1].hasUnread)
     #expect(groups[1].isUnnamed)
 }
 

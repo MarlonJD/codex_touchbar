@@ -4,10 +4,13 @@ import PrivateTouchBar
 
 @MainActor
 final class TouchBarController: NSObject {
+    private static let projectStripWidth: CGFloat = 440
+    private static let projectStripWidthWithWeeklyLimit: CGFloat = 390
     private static let barIdentifier = NSTouchBar.CustomizationIdentifier("dev.marlonjd.CodexTouchBar.projects")
     private static let projectsItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.projects.item")
     private static let trayItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.tray")
     private static let scrubberItemIdentifier = NSUserInterfaceItemIdentifier("dev.marlonjd.CodexTouchBar.project-cell")
+    private static let weeklyLimitItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.weekly-limit")
     private static let effortItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.effort")
     private static let speedItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.speed")
     private static let backItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.settings.back")
@@ -24,7 +27,10 @@ final class TouchBarController: NSObject {
     private let trayItem: NSCustomTouchBarItem
     private var trayItemWasAdded = false
     private var layoutState = TouchBarLayoutState()
+    private var weeklyLimit: WeeklyLimitUsage?
+    private var projectStripWidthConstraint: NSLayoutConstraint?
     private var settingSelections: [NSTouchBarItem.Identifier: SettingSelection] = [:]
+    private lazy var weeklyLimitButton = makeWeeklyLimitButton()
     private lazy var effortButton = makeMainSettingButton(
         title: effortTitle,
         symbolName: "brain.head.profile",
@@ -89,6 +95,29 @@ final class TouchBarController: NSObject {
             symbolName: "brain.head.profile"
         )
         effortButton.setAccessibilityLabel(selectedTitle)
+    }
+
+    func showWeeklyLimit(_ usage: WeeklyLimitUsage?) {
+        let visibilityChanged = (weeklyLimit == nil) != (usage == nil)
+        weeklyLimit = usage
+        projectStripWidthConstraint?.constant = usage == nil
+            ? Self.projectStripWidth
+            : Self.projectStripWidthWithWeeklyLimit
+
+        if let usage {
+            let title = weeklyLimitTitle(remainingPercent: usage.remainingPercent)
+            weeklyLimitButton.image = TouchBarImageRenderer.image(
+                title: title,
+                symbolName: "calendar"
+            )
+            weeklyLimitButton.setAccessibilityLabel(weeklyLimitAccessibilityLabel(
+                remainingPercent: usage.remainingPercent
+            ))
+        }
+
+        if visibilityChanged, layoutState.mode == .projects {
+            updateVisibleItems()
+        }
     }
 
     func showSelectedSpeed(_ choice: SpeedChoice) {
@@ -165,10 +194,19 @@ final class TouchBarController: NSObject {
         scrubber.dataSource = self
         scrubber.delegate = self
         scrubber.register(ProjectScrubberItemView.self, forItemIdentifier: Self.scrubberItemIdentifier)
-        scrubber.frame = NSRect(x: 0, y: 0, width: 440, height: 30)
+        scrubber.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: Self.projectStripWidth,
+            height: 30
+        )
         scrubber.translatesAutoresizingMaskIntoConstraints = false
+        let projectStripWidthConstraint = scrubber.widthAnchor.constraint(
+            equalToConstant: Self.projectStripWidth
+        )
+        self.projectStripWidthConstraint = projectStripWidthConstraint
         NSLayoutConstraint.activate([
-            scrubber.widthAnchor.constraint(equalToConstant: 440),
+            projectStripWidthConstraint,
             scrubber.heightAnchor.constraint(equalToConstant: 30),
         ])
         scrubber.setAccessibilityLabel("Active Codex projects")
@@ -229,6 +267,26 @@ final class TouchBarController: NSObject {
         Locale.preferredLanguages.first?.hasPrefix("tr") == true ? "Geri" : "Back"
     }
 
+    private func weeklyLimitTitle(remainingPercent: Int) -> String {
+        Locale.preferredLanguages.first?.hasPrefix("tr") == true
+            ? "%\(remainingPercent) kaldı"
+            : "\(remainingPercent)% left"
+    }
+
+    private func weeklyLimitAccessibilityLabel(remainingPercent: Int) -> String {
+        Locale.preferredLanguages.first?.hasPrefix("tr") == true
+            ? "Haftalık limitin yüzde \(remainingPercent) kadarı kaldı"
+            : "\(remainingPercent) percent of weekly limit remaining"
+    }
+
+    private func makeWeeklyLimitButton() -> NSButton {
+        let button = NSButton(image: NSImage(), target: nil, action: nil)
+        button.bezelStyle = .texturedRounded
+        button.imagePosition = .imageOnly
+        button.refusesFirstResponder = true
+        return button
+    }
+
     private func makeMainSettingButton(title: String, symbolName: String, action: Selector) -> NSButton {
         let image = TouchBarImageRenderer.image(title: title, symbolName: symbolName)
         let button = NSButton(image: image, target: self, action: action)
@@ -250,12 +308,18 @@ final class TouchBarController: NSObject {
     private func updateVisibleItems() {
         switch layoutState.mode {
         case .projects:
-            touchBar.defaultItemIdentifiers = [
+            var identifiers: [NSTouchBarItem.Identifier] = [
                 Self.projectsItemIdentifier,
                 .flexibleSpace,
+            ]
+            if weeklyLimit != nil {
+                identifiers.append(Self.weeklyLimitItemIdentifier)
+            }
+            identifiers.append(contentsOf: [
                 Self.effortItemIdentifier,
                 Self.speedItemIdentifier,
-            ]
+            ])
+            touchBar.defaultItemIdentifiers = identifiers
         case .setting(.effort):
             touchBar.defaultItemIdentifiers = [Self.backItemIdentifier]
                 + EffortChoice.allCases.indices.map { settingIdentifier(prefix: "effort", index: $0) }
@@ -292,6 +356,12 @@ final class TouchBarController: NSObject {
 extension TouchBarController: NSTouchBarDelegate {
     func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
         guard identifier == Self.projectsItemIdentifier else {
+            if identifier == Self.weeklyLimitItemIdentifier {
+                let item = NSCustomTouchBarItem(identifier: identifier)
+                item.customizationLabel = "Weekly Limit"
+                item.view = weeklyLimitButton
+                return item
+            }
             if identifier == Self.effortItemIdentifier {
                 let item = NSCustomTouchBarItem(identifier: identifier)
                 item.customizationLabel = effortTitle
@@ -359,7 +429,11 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
             view.configure(title: "No active Codex tasks", count: 0, isPlaceholder: true)
         } else {
             let group = groups[index]
-            view.configure(title: group.displayName(), count: group.threads.count)
+            view.configure(
+                title: group.displayName(),
+                count: group.threads.count,
+                hasUnread: group.hasUnread
+            )
         }
         return view
     }
@@ -374,9 +448,11 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
             title = "No active Codex tasks"
         } else {
             let group = groups[itemIndex]
-            title = group.threads.count > 1
-                ? "\(group.displayName()) · \(group.threads.count)"
-                : group.displayName()
+            title = ProjectScrubberItemView.displayTitle(
+                title: group.displayName(),
+                count: group.threads.count,
+                hasUnread: group.hasUnread
+            )
         }
 
         let textWidth = (title as NSString).size(withAttributes: [

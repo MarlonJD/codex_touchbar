@@ -7,6 +7,7 @@ struct RolloutTaskEvent: Equatable, Sendable {
 
 struct RolloutTailUpdate: Equatable, Sendable {
     let latestEvent: RolloutTaskEvent?
+    let latestWeeklyLimit: WeeklyLimitUsage?
     let processedOffset: UInt64
     let bytesRead: Int
 }
@@ -21,6 +22,7 @@ enum RolloutTailReader {
         guard let lastNewline = data.lastIndex(of: UInt8(ascii: "\n")) else {
             return RolloutTailUpdate(
                 latestEvent: nil,
+                latestWeeklyLimit: nil,
                 processedOffset: offset,
                 bytesRead: data.count
             )
@@ -28,14 +30,16 @@ enum RolloutTailReader {
 
         let completedData = data.prefix(through: lastNewline)
         var latestEvent: RolloutTaskEvent?
+        var latestWeeklyLimit: WeeklyLimitUsage?
         for line in completedData.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true) {
-            if let event = taskEvent(in: Data(line)) {
-                latestEvent = event
-            }
+            let events = lineEvents(in: Data(line))
+            latestEvent = events.task ?? latestEvent
+            latestWeeklyLimit = events.weeklyLimit ?? latestWeeklyLimit
         }
 
         return RolloutTailUpdate(
             latestEvent: latestEvent,
+            latestWeeklyLimit: latestWeeklyLimit,
             processedOffset: offset + UInt64(completedData.count),
             bytesRead: data.count
         )
@@ -64,18 +68,57 @@ enum RolloutTailReader {
     }
 
     static func taskEvent(in lineData: Data) -> RolloutTaskEvent? {
+        lineEvents(in: lineData).task
+    }
+
+    static func weeklyLimit(in lineData: Data) -> WeeklyLimitUsage? {
+        lineEvents(in: lineData).weeklyLimit
+    }
+
+    static func lineEvents(
+        in lineData: Data
+    ) -> (task: RolloutTaskEvent?, weeklyLimit: WeeklyLimitUsage?) {
         guard let object = try? JSONSerialization.jsonObject(with: lineData),
               let envelope = object as? [String: Any],
               envelope["type"] as? String == "event_msg",
-              let payload = envelope["payload"] as? [String: Any],
-              let eventType = payload["type"] as? String,
-              ["task_started", "task_complete", "turn_aborted"].contains(eventType) else {
-            return nil
+              let payload = envelope["payload"] as? [String: Any] else {
+            return (nil, nil)
         }
 
-        return RolloutTaskEvent(
-            type: eventType,
-            timestamp: parseTimestamp(envelope["timestamp"])
+        let timestamp = parseTimestamp(envelope["timestamp"])
+        let task: RolloutTaskEvent?
+        if let eventType = payload["type"] as? String,
+           ["task_started", "task_complete", "turn_aborted"].contains(eventType) {
+            task = RolloutTaskEvent(type: eventType, timestamp: timestamp)
+        } else {
+            task = nil
+        }
+
+        guard payload["type"] as? String == "token_count",
+              let rateLimits = payload["rate_limits"] as? [String: Any],
+              let recordedAt = timestamp else {
+            return (task, nil)
+        }
+
+        let weeklyWindow = ["primary", "secondary"]
+            .compactMap { rateLimits[$0] as? [String: Any] }
+            .first { window in
+                (window["window_minutes"] as? NSNumber)?.intValue == 7 * 24 * 60
+            }
+        guard let weeklyWindow,
+              let usedPercent = (weeklyWindow["used_percent"] as? NSNumber)?.doubleValue else {
+            return (task, nil)
+        }
+
+        let resetsAt = (weeklyWindow["resets_at"] as? NSNumber)
+            .map { Date(timeIntervalSince1970: $0.doubleValue) }
+        return (
+            task,
+            WeeklyLimitUsage(
+                usedPercent: usedPercent,
+                resetsAt: resetsAt,
+                recordedAt: recordedAt
+            )
         )
     }
 

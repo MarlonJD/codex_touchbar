@@ -1,5 +1,37 @@
 import Foundation
 
+public struct WeeklyLimitUsage: Equatable, Sendable {
+    public let usedPercent: Double
+    public let resetsAt: Date?
+    public let recordedAt: Date
+
+    public init(usedPercent: Double, resetsAt: Date?, recordedAt: Date) {
+        self.usedPercent = usedPercent
+        self.resetsAt = resetsAt
+        self.recordedAt = recordedAt
+    }
+
+    public var remainingPercent: Int {
+        Int((100 - min(max(usedPercent, 0), 100)).rounded())
+    }
+}
+
+public struct RolloutSnapshot: Equatable, Sendable {
+    public let threads: [ActiveThread]
+    public let weeklyLimit: WeeklyLimitUsage?
+    public let unreadWorkingDirectories: [URL]
+
+    public init(
+        threads: [ActiveThread],
+        weeklyLimit: WeeklyLimitUsage?,
+        unreadWorkingDirectories: [URL] = []
+    ) {
+        self.threads = threads
+        self.weeklyLimit = weeklyLimit
+        self.unreadWorkingDirectories = unreadWorkingDirectories
+    }
+}
+
 public struct ActiveThread: Equatable, Sendable {
     public let id: String
     public let cwd: URL
@@ -27,12 +59,20 @@ public struct ProjectGroup: Equatable, Sendable, Identifiable {
     public let name: String
     public let threads: [ActiveThread]
     public let isUnnamed: Bool
+    public let hasUnread: Bool
 
-    public init(id: String, name: String, threads: [ActiveThread], isUnnamed: Bool) {
+    public init(
+        id: String,
+        name: String,
+        threads: [ActiveThread],
+        isUnnamed: Bool,
+        hasUnread: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.threads = threads
         self.isUnnamed = isUnnamed
+        self.hasUnread = hasUnread
     }
 
     public func displayName(maxLength: Int = 20) -> String {

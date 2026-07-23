@@ -16,8 +16,18 @@ private func runDiagnostics() {
     let grouper = ProjectGrouper()
 
     Task {
-        let threads = await scanner.scan()
-        let groups = grouper.groups(from: threads)
+        let snapshot = await scanner.scanSnapshot()
+        if let weeklyLimit = snapshot.weeklyLimit {
+            print("Weekly limit\t\(weeklyLimit.remainingPercent)% remaining")
+        } else {
+            print("Weekly limit\tUnavailable")
+        }
+        print("Unread project directories\t\(snapshot.unreadWorkingDirectories.count)")
+
+        let groups = grouper.groups(
+            from: snapshot.threads,
+            unreadWorkingDirectories: snapshot.unreadWorkingDirectories
+        )
         if groups.isEmpty {
             print("No active Codex tasks")
         } else {

@@ -35,7 +35,12 @@ import Testing
         at: sessionsRoot.appendingPathComponent("subagent.jsonl")
     )
 
-    let scanner = RolloutScanner(sessionsRoot: sessionsRoot, stateDatabase: nil, recentFileInterval: 60)
+    let scanner = RolloutScanner(
+        sessionsRoot: sessionsRoot,
+        stateDatabase: nil,
+        globalStateFile: nil,
+        recentFileInterval: 60
+    )
     let threads = await scanner.scan()
 
     #expect(threads.map(\.id) == ["active-thread"])
@@ -102,6 +107,7 @@ import Testing
     let scanner = RolloutScanner(
         sessionsRoot: root,
         stateDatabase: databaseURL,
+        globalStateFile: nil,
         recentFileInterval: 60
     )
     let threads = await scanner.scan()
@@ -110,6 +116,94 @@ import Testing
     #expect(threads.first?.cwd.path == "/tmp/visible-project")
     #expect(Int64(threads.first?.updatedAt.timeIntervalSince1970 ?? 0) == updatedAt)
     #expect(Int64(threads.first?.projectRecencyAt.timeIntervalSince1970 ?? 0) == childUpdatedAt)
+}
+
+@Test func reportsTheLatestWeeklyLimitAcrossOldAndNewRateLimitShapes() async throws {
+    let sessionsRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: sessionsRoot) }
+    try FileManager.default.createDirectory(at: sessionsRoot, withIntermediateDirectories: true)
+
+    let older = """
+    {"timestamp":"2026-07-21T01:00:00.000Z","type":"session_meta","payload":{"id":"older","cwd":"/tmp/older","thread_source":"user"}}
+    {"timestamp":"2026-07-21T01:01:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":25,"window_minutes":300,"resets_at":1784685660},"secondary":{"used_percent":6,"window_minutes":10080,"resets_at":1785286860}}}}
+    {"timestamp":"2026-07-21T01:02:00.000Z","type":"event_msg","payload":{"type":"task_complete"}}
+
+    """
+    let newer = """
+    {"timestamp":"2026-07-22T01:00:00.000Z","type":"session_meta","payload":{"id":"newer","cwd":"/tmp/newer","thread_source":"user"}}
+    {"timestamp":"2026-07-22T01:00:30.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":5,"window_minutes":10080,"resets_at":1785373260},"secondary":null}}}
+    {"timestamp":"2026-07-22T01:01:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":7,"window_minutes":10080,"resets_at":1785373260},"secondary":null}}}
+    {"timestamp":"2026-07-22T01:02:00.000Z","type":"event_msg","payload":{"type":"task_complete"}}
+
+    """
+    try older.write(
+        to: sessionsRoot.appendingPathComponent("older.jsonl"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try newer.write(
+        to: sessionsRoot.appendingPathComponent("newer.jsonl"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let scanner = RolloutScanner(
+        sessionsRoot: sessionsRoot,
+        stateDatabase: nil,
+        globalStateFile: nil,
+        recentFileInterval: 7 * 24 * 60 * 60
+    )
+    let snapshot = await scanner.scanSnapshot()
+
+    #expect(snapshot.weeklyLimit?.usedPercent == 7)
+    #expect(snapshot.weeklyLimit?.remainingPercent == 93)
+}
+
+@Test func reportsUnreadProjectDirectoriesWithoutTreatingCompletedTasksAsActive() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+    let projectPath = root.appendingPathComponent("project", isDirectory: true).path
+    try rollout(
+        id: "active-thread",
+        cwd: projectPath,
+        events: ["task_started"],
+        at: root.appendingPathComponent("active.jsonl")
+    )
+    try rollout(
+        id: "unread-completed-thread",
+        cwd: projectPath,
+        events: ["task_started", "task_complete"],
+        at: root.appendingPathComponent("completed.jsonl")
+    )
+
+    let globalStateFile = root.appendingPathComponent("global-state.json")
+    let globalState = """
+    {"electron-persisted-atom-state":{"unread-thread-ids-by-host-v1":{"local":["unread-completed-thread"]}}}
+    """
+    try globalState.write(to: globalStateFile, atomically: true, encoding: .utf8)
+
+    let scanner = RolloutScanner(
+        sessionsRoot: root,
+        stateDatabase: nil,
+        globalStateFile: globalStateFile,
+        recentFileInterval: 60
+    )
+    let snapshot = await scanner.scanSnapshot()
+
+    #expect(snapshot.threads.map(\.id) == ["active-thread"])
+    #expect(snapshot.unreadWorkingDirectories.map(\.path) == [projectPath])
+}
+
+@Test func weeklyLimitRemainingPercentageIsRoundedAndClamped() {
+    let now = Date()
+
+    #expect(WeeklyLimitUsage(usedPercent: 5.6, resetsAt: nil, recordedAt: now).remainingPercent == 94)
+    #expect(WeeklyLimitUsage(usedPercent: -2, resetsAt: nil, recordedAt: now).remainingPercent == 100)
+    #expect(WeeklyLimitUsage(usedPercent: 140, resetsAt: nil, recordedAt: now).remainingPercent == 0)
 }
 
 private func rollout(
@@ -138,6 +232,7 @@ private func rollout(
     let initialSize = UInt64(initial.utf8.count)
     let appended = """
     {"type":"response_item"}
+    {"timestamp":"2026-07-21T01:00:01.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":6,"window_minutes":10080,"resets_at":1785286860}}}}
     {"timestamp":"2026-07-21T01:00:02.000Z","type":"event_msg","payload":{"type":"task_complete"}}
 
     """
@@ -151,6 +246,7 @@ private func rollout(
     #expect(update.bytesRead == appended.utf8.count)
     #expect(update.processedOffset == initialSize + UInt64(appended.utf8.count))
     #expect(update.latestEvent?.type == "task_complete")
+    #expect(update.latestWeeklyLimit?.remainingPercent == 94)
 }
 
 @Test func tailReaderRetriesAnIncompleteFinalLine() throws {

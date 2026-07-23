@@ -9,9 +9,11 @@ When Codex is the frontmost app, the Touch Bar shows a horizontally scrollable p
 ```
 
 Tapping a project opens its first active task. Repeated taps cycle through that project's active tasks and then wrap back to the first one.
+Projects with an unread Codex result are highlighted in purple with a dot.
 
-The right side also provides native Touch Bar popovers for the currently visible task:
+The right side shows the remaining weekly Codex allowance and provides native Touch Bar popovers for the currently visible task:
 
+- **Weekly limit:** the latest remaining percentage reported by Codex
 - **Effort:** Low, Medium, High, Extra High, or Ultra
 - **Speed:** Standard or Fast
 
@@ -54,7 +56,7 @@ Optional run modes:
 Create a notarized release archive with:
 
 ```bash
-./script/build_release.sh 0.1.0
+./script/build_release.sh 0.2.0
 ```
 
 The release script requires the Developer ID identity and `desktop-updater-notary` Keychain profile. It signs with hardened runtime, submits the archive to Apple, staples the ticket, validates it with Gatekeeper, and writes the final ZIP under `dist/release`.
@@ -62,7 +64,8 @@ The release script requires the Developer ID identity and `desktop-updater-notar
 ## How it works
 
 - Reads Codex's local `~/.codex/state_5.sqlite` thread index in read-only mode.
-- Checks only task lifecycle event types in recent rollout JSONL files. Prompt and response text is not used.
+- Checks only task lifecycle fields and weekly rate-limit metadata in recent rollout JSONL files. Prompt and response text is not used.
+- Reads Codex's local unread-thread IDs to highlight active projects that need attention.
 - Treats a task as active when its latest lifecycle event is `task_started`, unless followed by `task_complete` or `turn_aborted`.
 - Groups tasks by their nearest Git repository; Codex scratch directories appear as `Unnamed Project`.
 - Opens tasks through the native `codex://threads/<id>` deep link.

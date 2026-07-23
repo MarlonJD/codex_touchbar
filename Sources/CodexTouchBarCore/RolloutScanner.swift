@@ -13,6 +13,18 @@ public actor RolloutScanner {
     private struct RolloutRecord {
         let thread: ActiveThread
         let isActive: Bool
+        let weeklyLimit: WeeklyLimitUsage?
+    }
+
+    private struct LatestRolloutEvents {
+        let task: RolloutTaskEvent?
+        let weeklyLimit: WeeklyLimitUsage?
+    }
+
+    private struct CachedUnreadState {
+        let modificationDate: Date
+        let fileSize: Int
+        let threadIDs: Set<String>
     }
 
     private struct IndexedThreadRoot {
@@ -25,22 +37,31 @@ public actor RolloutScanner {
 
     private let sessionsRoot: URL
     private let stateDatabase: URL?
+    private let globalStateFile: URL?
     private let recentFileInterval: TimeInterval
     private var cache: [URL: CachedRollout] = [:]
+    private var cachedUnreadState: CachedUnreadState?
 
     public init(
         sessionsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true),
         stateDatabase: URL? = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/state_5.sqlite"),
+        globalStateFile: URL? = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/.codex-global-state.json"),
         recentFileInterval: TimeInterval = 7 * 24 * 60 * 60
     ) {
         self.sessionsRoot = sessionsRoot
         self.stateDatabase = stateDatabase
+        self.globalStateFile = globalStateFile
         self.recentFileInterval = recentFileInterval
     }
 
     public func scan() -> [ActiveThread] {
+        scanSnapshot().threads
+    }
+
+    public func scanSnapshot() -> RolloutSnapshot {
         let fileManager = FileManager.default
         let resourceKeys: Set<URLResourceKey> = [
             .isRegularFileKey,
@@ -48,12 +69,18 @@ public actor RolloutScanner {
             .fileSizeKey,
         ]
         let cutoff = Date().addingTimeInterval(-recentFileInterval)
+        let unreadThreadIDs = unreadThreadIDs(fileManager: fileManager)
         var seenURLs = Set<URL>()
+        var weeklyLimits: [WeeklyLimitUsage] = []
+        var unreadWorkingDirectories = Set<URL>()
         let activeThreads: [ActiveThread]
 
         if let indexedRoots = indexedThreadRoots() {
             activeThreads = indexedRoots.compactMap { root in
-                let activeRecords = root.rolloutURLs.compactMap { url in
+                if unreadThreadIDs.contains(root.id) {
+                    unreadWorkingDirectories.insert(root.cwd.standardizedFileURL)
+                }
+                let records = root.rolloutURLs.compactMap { url in
                     cachedRecord(
                         at: url,
                         allowsSubagent: true,
@@ -62,7 +89,8 @@ public actor RolloutScanner {
                         seenURLs: &seenURLs
                     )
                 }
-                .filter(\.isActive)
+                weeklyLimits.append(contentsOf: records.compactMap(\.weeklyLimit))
+                let activeRecords = records.filter(\.isActive)
 
                 guard let startedAt = activeRecords.map(\.thread.startedAt).min() else {
                     return nil
@@ -84,7 +112,16 @@ public actor RolloutScanner {
                     cutoff: cutoff,
                     resourceKeys: resourceKeys,
                     seenURLs: &seenURLs
-                ), record.isActive else {
+                ) else {
+                    continue
+                }
+                if let weeklyLimit = record.weeklyLimit {
+                    weeklyLimits.append(weeklyLimit)
+                }
+                if unreadThreadIDs.contains(record.thread.id) {
+                    unreadWorkingDirectories.insert(record.thread.cwd.standardizedFileURL)
+                }
+                guard record.isActive else {
                     continue
                 }
                 let existing = activeThreadsByID[record.thread.id]
@@ -96,12 +133,56 @@ public actor RolloutScanner {
         }
 
         cache = cache.filter { seenURLs.contains($0.key) }
-        return activeThreads.sorted {
+        let sortedThreads = activeThreads.sorted {
             if $0.startedAt == $1.startedAt {
                 return $0.id < $1.id
             }
             return $0.startedAt < $1.startedAt
         }
+        let latestWeeklyLimit = weeklyLimits.max {
+            $0.recordedAt < $1.recordedAt
+        }
+        return RolloutSnapshot(
+            threads: sortedThreads,
+            weeklyLimit: latestWeeklyLimit,
+            unreadWorkingDirectories: unreadWorkingDirectories.sorted {
+                $0.path < $1.path
+            }
+        )
+    }
+
+    private func unreadThreadIDs(fileManager: FileManager) -> Set<String> {
+        guard let globalStateFile,
+              let values = try? globalStateFile.resourceValues(
+                  forKeys: [.contentModificationDateKey, .fileSizeKey]
+              ),
+              let modificationDate = values.contentModificationDate else {
+            return cachedUnreadState?.threadIDs ?? []
+        }
+
+        let fileSize = values.fileSize ?? 0
+        if let cachedUnreadState,
+           cachedUnreadState.modificationDate == modificationDate,
+           cachedUnreadState.fileSize == fileSize {
+            return cachedUnreadState.threadIDs
+        }
+
+        guard let data = fileManager.contents(atPath: globalStateFile.path),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let root = object as? [String: Any],
+              let atomState = root["electron-persisted-atom-state"] as? [String: Any],
+              let unreadByHost = atomState["unread-thread-ids-by-host-v1"] as? [String: Any],
+              let localThreadIDs = unreadByHost["local"] as? [String] else {
+            return cachedUnreadState?.threadIDs ?? []
+        }
+
+        let threadIDs = Set(localThreadIDs)
+        cachedUnreadState = CachedUnreadState(
+            modificationDate: modificationDate,
+            fileSize: fileSize,
+            threadIDs: threadIDs
+        )
+        return threadIDs
     }
 
     private func cachedRecord(
@@ -139,7 +220,7 @@ public actor RolloutScanner {
            ) {
             let updatedRecord = updateRecord(
                 record,
-                with: update.latestEvent,
+                with: update,
                 updatedAt: modificationDate
             )
             cache[standardizedURL] = CachedRollout(
@@ -173,15 +254,15 @@ public actor RolloutScanner {
 
     private func updateRecord(
         _ record: RolloutRecord,
-        with event: RolloutTaskEvent?,
+        with update: RolloutTailUpdate,
         updatedAt: Date
     ) -> RolloutRecord {
         let isActive: Bool
         let startedAt: Date
-        switch event?.type {
+        switch update.latestEvent?.type {
         case "task_started":
             isActive = true
-            startedAt = event?.timestamp ?? updatedAt
+            startedAt = update.latestEvent?.timestamp ?? updatedAt
         case "task_complete", "turn_aborted":
             isActive = false
             startedAt = record.thread.startedAt
@@ -197,7 +278,8 @@ public actor RolloutScanner {
                 startedAt: startedAt,
                 updatedAt: updatedAt
             ),
-            isActive: isActive
+            isActive: isActive,
+            weeklyLimit: update.latestWeeklyLimit ?? record.weeklyLimit
         )
     }
 
@@ -206,9 +288,9 @@ public actor RolloutScanner {
             return nil
         }
 
-        let latestEvent = latestTaskEvent(at: url)
-        let activeStartedAt = latestEvent?.type == "task_started"
-            ? latestEvent?.timestamp ?? updatedAt
+        let latestEvents = latestRolloutEvents(at: url)
+        let activeStartedAt = latestEvents.task?.type == "task_started"
+            ? latestEvents.task?.timestamp ?? updatedAt
             : nil
 
         let thread = ActiveThread(
@@ -217,7 +299,11 @@ public actor RolloutScanner {
             startedAt: activeStartedAt ?? updatedAt,
             updatedAt: updatedAt
         )
-        return RolloutRecord(thread: thread, isActive: activeStartedAt != nil)
+        return RolloutRecord(
+            thread: thread,
+            isActive: activeStartedAt != nil,
+            weeklyLimit: latestEvents.weeklyLimit
+        )
     }
 
     private func fallbackRolloutURLs(
@@ -362,10 +448,10 @@ public actor RolloutScanner {
         return rootOrder.compactMap { rootsByID[$0] }
     }
 
-    private func latestTaskEvent(at url: URL) -> RolloutTaskEvent? {
+    private func latestRolloutEvents(at url: URL) -> LatestRolloutEvents {
         guard let handle = try? FileHandle(forReadingFrom: url),
               let fileSize = try? handle.seekToEnd() else {
-            return nil
+            return LatestRolloutEvents(task: nil, weeklyLimit: nil)
         }
         defer { try? handle.close() }
 
@@ -373,6 +459,8 @@ public actor RolloutScanner {
         let newline = UInt8(ascii: "\n")
         var position = fileSize
         var leadingFragment = Data()
+        var latestTask: RolloutTaskEvent?
+        var latestWeeklyLimit: WeeklyLimitUsage?
 
         while position > 0 {
             let readStart = position > chunkSize ? position - chunkSize : 0
@@ -380,7 +468,10 @@ public actor RolloutScanner {
             do {
                 try handle.seek(toOffset: readStart)
                 guard let chunk = try handle.read(upToCount: readCount) else {
-                    return nil
+                    return LatestRolloutEvents(
+                        task: latestTask,
+                        weeklyLimit: latestWeeklyLimit
+                    )
                 }
 
                 var combined = chunk
@@ -394,16 +485,30 @@ public actor RolloutScanner {
                 }
 
                 for line in lines.reversed() {
-                    if let event = RolloutTailReader.taskEvent(in: Data(line)) {
-                        return event
+                    let events = RolloutTailReader.lineEvents(in: Data(line))
+                    latestTask = latestTask ?? events.task
+                    latestWeeklyLimit = latestWeeklyLimit ?? events.weeklyLimit
+                    if latestTask != nil, latestWeeklyLimit != nil {
+                        return LatestRolloutEvents(
+                            task: latestTask,
+                            weeklyLimit: latestWeeklyLimit
+                        )
                     }
                 }
             } catch {
-                return nil
+                return LatestRolloutEvents(
+                    task: latestTask,
+                    weeklyLimit: latestWeeklyLimit
+                )
             }
             position = readStart
         }
-        return leadingFragment.isEmpty ? nil : RolloutTailReader.taskEvent(in: leadingFragment)
+        if !leadingFragment.isEmpty {
+            let events = RolloutTailReader.lineEvents(in: leadingFragment)
+            latestTask = latestTask ?? events.task
+            latestWeeklyLimit = latestWeeklyLimit ?? events.weeklyLimit
+        }
+        return LatestRolloutEvents(task: latestTask, weeklyLimit: latestWeeklyLimit)
     }
 
     private func readSessionMetadata(at url: URL) -> (id: String, cwd: URL, isSubagent: Bool)? {

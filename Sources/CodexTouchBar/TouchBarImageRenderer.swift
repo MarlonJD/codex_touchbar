@@ -15,7 +15,7 @@ enum TouchBarImageRenderer {
         ]
         let textSize = (title as NSString).size(withAttributes: attributes)
         let symbolSize = NSSize(width: 16, height: 16)
-        let symbolSpacing: CGFloat = symbolName == nil ? 0 : 6
+        let symbolSpacing: CGFloat = symbolName == nil || title.isEmpty ? 0 : 6
         let indicatorDiameter: CGFloat = 7
         let indicatorSpacing: CGFloat = trailingDotColor == nil ? 0 : 6
         let width = ceil(textSize.width)

@@ -4,10 +4,14 @@ import PrivateTouchBar
 
 @MainActor
 final class TouchBarController: NSObject {
-    private static let projectStripWidth: CGFloat = 440
-    private static let projectStripWidthWithWeeklyLimit: CGFloat = 390
     private static let barIdentifier = NSTouchBar.CustomizationIdentifier("dev.marlonjd.CodexTouchBar.projects")
     private static let projectsItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.projects.item")
+    private static let expandProjectsItemIdentifier = NSTouchBarItem.Identifier(
+        "dev.marlonjd.CodexTouchBar.projects.expand"
+    )
+    private static let collapseProjectsItemIdentifier = NSTouchBarItem.Identifier(
+        "dev.marlonjd.CodexTouchBar.projects.collapse"
+    )
     private static let trayItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.tray")
     private static let scrubberItemIdentifier = NSUserInterfaceItemIdentifier("dev.marlonjd.CodexTouchBar.project-cell")
     private static let weeklyLimitItemIdentifier = NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.weekly-limit")
@@ -82,6 +86,7 @@ final class TouchBarController: NSObject {
     func update(groups: [ProjectGroup]) {
         self.groups = groups
         scrubber.reloadData()
+        scrubber.selectedIndex = groups.firstIndex(where: \.isSelected) ?? -1
         if groups.first?.hasUnread == true || groups.first?.isSelected == true {
             DispatchQueue.main.async { [weak self] in
                 self?.scrubber.scrollItem(at: 0, to: .leading)
@@ -105,9 +110,7 @@ final class TouchBarController: NSObject {
     func showWeeklyLimit(_ usage: WeeklyLimitUsage?) {
         let visibilityChanged = (weeklyLimit == nil) != (usage == nil)
         weeklyLimit = usage
-        projectStripWidthConstraint?.constant = usage == nil
-            ? Self.projectStripWidth
-            : Self.projectStripWidthWithWeeklyLimit
+        updateProjectStripWidth()
 
         if let usage {
             let title = weeklyLimitTitle(remainingPercent: usage.remainingPercent)
@@ -187,7 +190,7 @@ final class TouchBarController: NSObject {
         updateVisibleItems()
 
         let layout = NSScrubberFlowLayout()
-        layout.itemSpacing = 4
+        layout.itemSpacing = CGFloat(TouchBarProjectStripMetrics.itemSpacing)
         layout.itemSize = NSSize(width: 120, height: 30)
         scrubber.scrubberLayout = layout
         scrubber.mode = .free
@@ -195,19 +198,19 @@ final class TouchBarController: NSObject {
         scrubber.isContinuous = false
         scrubber.showsArrowButtons = false
         scrubber.showsAdditionalContentIndicators = true
-        scrubber.selectionBackgroundStyle = .roundedBackground
+        scrubber.selectionBackgroundStyle = nil
         scrubber.dataSource = self
         scrubber.delegate = self
         scrubber.register(ProjectScrubberItemView.self, forItemIdentifier: Self.scrubberItemIdentifier)
         scrubber.frame = NSRect(
             x: 0,
             y: 0,
-            width: Self.projectStripWidth,
+            width: projectStripWidth,
             height: 30
         )
         scrubber.translatesAutoresizingMaskIntoConstraints = false
         let projectStripWidthConstraint = scrubber.widthAnchor.constraint(
-            equalToConstant: Self.projectStripWidth
+            equalToConstant: projectStripWidth
         )
         self.projectStripWidthConstraint = projectStripWidthConstraint
         NSLayoutConstraint.activate([
@@ -234,6 +237,16 @@ final class TouchBarController: NSObject {
 
     @objc private func showSpeedOptions() {
         layoutState.show(.speed)
+        updateVisibleItems()
+    }
+
+    @objc private func showExpandedProjects() {
+        layoutState.expandProjects()
+        updateVisibleItems()
+    }
+
+    @objc private func hideExpandedProjects() {
+        layoutState.collapseProjects()
         updateVisibleItems()
     }
 
@@ -270,6 +283,25 @@ final class TouchBarController: NSObject {
 
     private var backTitle: String {
         Locale.preferredLanguages.first?.hasPrefix("tr") == true ? "Geri" : "Back"
+    }
+
+    private var expandProjectsTitle: String {
+        Locale.preferredLanguages.first?.hasPrefix("tr") == true
+            ? "Projeleri genişlet"
+            : "Expand projects"
+    }
+
+    private var collapseProjectsTitle: String {
+        Locale.preferredLanguages.first?.hasPrefix("tr") == true
+            ? "Projeleri daralt"
+            : "Collapse projects"
+    }
+
+    private var projectStripWidth: CGFloat {
+        CGFloat(TouchBarProjectStripMetrics.width(
+            for: layoutState.mode,
+            hasWeeklyLimit: weeklyLimit != nil
+        ))
     }
 
     private func weeklyLimitTitle(remainingPercent: Int) -> String {
@@ -311,10 +343,12 @@ final class TouchBarController: NSObject {
     }
 
     private func updateVisibleItems() {
+        updateProjectStripWidth()
         switch layoutState.mode {
         case .projects:
             var identifiers: [NSTouchBarItem.Identifier] = [
                 Self.projectsItemIdentifier,
+                Self.expandProjectsItemIdentifier,
                 .flexibleSpace,
             ]
             if weeklyLimit != nil {
@@ -325,6 +359,12 @@ final class TouchBarController: NSObject {
                 Self.speedItemIdentifier,
             ])
             touchBar.defaultItemIdentifiers = identifiers
+        case .expandedProjects:
+            touchBar.defaultItemIdentifiers = [
+                Self.projectsItemIdentifier,
+                .flexibleSpace,
+                Self.collapseProjectsItemIdentifier,
+            ]
         case .setting(.effort):
             touchBar.defaultItemIdentifiers = [Self.backItemIdentifier]
                 + EffortChoice.allCases.indices.map { settingIdentifier(prefix: "effort", index: $0) }
@@ -337,6 +377,10 @@ final class TouchBarController: NSObject {
                 + [.flexibleSpace]
         }
         enforceCloseBoxVisibility()
+    }
+
+    private func updateProjectStripWidth() {
+        projectStripWidthConstraint?.constant = projectStripWidth
     }
 
     private func settingIdentifier(prefix: String, index: Int) -> NSTouchBarItem.Identifier {
@@ -361,6 +405,28 @@ final class TouchBarController: NSObject {
 extension TouchBarController: NSTouchBarDelegate {
     func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
         guard identifier == Self.projectsItemIdentifier else {
+            if identifier == Self.expandProjectsItemIdentifier {
+                let item = NSCustomTouchBarItem(identifier: identifier)
+                item.customizationLabel = expandProjectsTitle
+                item.view = TouchBarControlStyle.makeNavigationButton(
+                    symbolName: "chevron.forward",
+                    accessibilityLabel: expandProjectsTitle,
+                    target: self,
+                    action: #selector(showExpandedProjects)
+                )
+                return item
+            }
+            if identifier == Self.collapseProjectsItemIdentifier {
+                let item = NSCustomTouchBarItem(identifier: identifier)
+                item.customizationLabel = collapseProjectsTitle
+                item.view = TouchBarControlStyle.makeNavigationButton(
+                    symbolName: "chevron.backward",
+                    accessibilityLabel: collapseProjectsTitle,
+                    target: self,
+                    action: #selector(hideExpandedProjects)
+                )
+                return item
+            }
             if identifier == Self.weeklyLimitItemIdentifier {
                 let item = NSCustomTouchBarItem(identifier: identifier)
                 item.customizationLabel = "Weekly Limit"
@@ -465,7 +531,16 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
         let textWidth = (title as NSString).size(withAttributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
         ]).width
-        return NSSize(width: min(max(70, ceil(textWidth) + 39), 190), height: 30)
+        let unreadIndicatorWidth: CGFloat
+        if groups.indices.contains(itemIndex), groups[itemIndex].hasUnread {
+            unreadIndicatorWidth = 13
+        } else {
+            unreadIndicatorWidth = 0
+        }
+        return NSSize(
+            width: min(max(70, ceil(textWidth) + 39 + unreadIndicatorWidth), 190),
+            height: 30
+        )
     }
 
     func scrubber(_ scrubber: NSScrubber, didSelectItemAt selectedIndex: Int) {
@@ -475,6 +550,5 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
         }
 
         onProjectSelected?(groups[selectedIndex])
-        scrubber.selectedIndex = -1
     }
 }

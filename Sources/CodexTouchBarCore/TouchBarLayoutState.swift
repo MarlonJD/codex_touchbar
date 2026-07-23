@@ -15,7 +15,7 @@ public enum TouchBarProjectStripMetrics {
     public static let navigationSlotWidth = navigationButtonWidth + itemSpacing
     public static let compactWidth = 392.0
     public static let compactWidthWithWeeklyLimit = 342.0
-    public static let expandedWidth = 590.0
+    public static let expandedWidth = 542.0
 
     public static func width(
         for mode: TouchBarLayoutMode,

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace loud project status colors with native selection styling and add a compact/expanded project browser controlled by trailing chevron buttons.
+**Goal:** Replace loud project status colors with native-looking selection styling and add a compact/expanded project browser controlled by trailing chevron buttons.
 
-**Architecture:** `TouchBarLayoutState` owns compact, expanded-project, and settings modes plus deterministic project-strip metrics. `TouchBarController` maps those modes to native Touch Bar items and persists the selected project through `NSScrubber.selectedIndex`. `ProjectScrubberItemView` and `TouchBarImageRenderer` keep project content white while rendering an independently colored unread dot.
+**Architecture:** `TouchBarLayoutState` owns compact, expanded-project, and settings modes plus deterministic project-strip metrics. `TouchBarController` maps those modes to Touch Bar items and persists the selected project through `NSScrubber.selectedIndex`. `TouchBarControlStyle` explicitly draws native-looking control backgrounds because AppKit's native scrubber selection decoration and custom button bezel are invisible on the private system-modal Touch Bar surface. `ProjectScrubberItemView` and `TouchBarImageRenderer` keep project content white while rendering an independently colored unread dot.
 
 **Tech Stack:** Swift 6, AppKit (`NSTouchBar`, `NSScrubber`, `NSButton`, `NSImage`), Swift Testing, Swift Package Manager.
 
@@ -14,7 +14,7 @@
 - Do not add third-party dependencies.
 - Compact mode keeps weekly limit, Effort, and Speed visible.
 - Expanded mode dedicates the available custom Touch Bar width to projects and a trailing collapse button.
-- Selected projects use the scrubber's native rounded background; no yellow text and no `▶`.
+- Selected projects use an explicit native-looking rounded background; no yellow text and no `▶`.
 - Unread projects keep white folder/name/count content and use only a purple trailing dot.
 - Existing live project ordering, tapping, unread synchronization, and accessibility labels remain intact.
 
@@ -61,6 +61,11 @@ Add tests equivalent to:
     )
     #expect(
         TouchBarProjectStripMetrics.expandedWidth
+            + TouchBarProjectStripMetrics.navigationSlotWidth
+            == 590
+    )
+    #expect(
+        TouchBarProjectStripMetrics.expandedWidth
             > TouchBarProjectStripMetrics.compactWidth
     )
 }
@@ -95,7 +100,7 @@ public enum TouchBarProjectStripMetrics {
     public static let navigationSlotWidth = navigationButtonWidth + itemSpacing
     public static let compactWidth = 392.0
     public static let compactWidthWithWeeklyLimit = 342.0
-    public static let expandedWidth = 590.0
+    public static let expandedWidth = 542.0
 
     public static func width(
         for mode: TouchBarLayoutMode,
@@ -223,6 +228,8 @@ struct ProjectCellPresentation {
     let title: String
     let textColor: NSColor
     let trailingDotColor: NSColor?
+    let backgroundColor: NSColor?
+    let cornerRadius: CGFloat
 }
 ```
 
@@ -233,18 +240,22 @@ static func presentation(
     title: String,
     count: Int,
     hasUnread: Bool,
-    isSelected _: Bool,
+    isSelected: Bool,
     isPlaceholder: Bool
 ) -> ProjectCellPresentation {
     ProjectCellPresentation(
         title: count > 1 ? "\(title) · \(count)" : title,
         textColor: isPlaceholder ? NSColor.white.withAlphaComponent(0.6) : .white,
-        trailingDotColor: hasUnread && !isPlaceholder ? .systemPurple : nil
+        trailingDotColor: hasUnread && !isPlaceholder ? .systemPurple : nil,
+        backgroundColor: isSelected && !isPlaceholder
+            ? TouchBarControlStyle.backgroundColor
+            : nil,
+        cornerRadius: TouchBarControlStyle.cornerRadius
     )
 }
 ```
 
-Update `configure(...)` to pass `presentation.title`, white `presentation.textColor`, and `presentation.trailingDotColor` to the renderer. Continue appending `current project` and `unread result available` to the accessibility label.
+Update `configure(...)` to pass `presentation.title`, white `presentation.textColor`, and `presentation.trailingDotColor` to the renderer, then apply the explicit selection background to the cell layer. Continue appending `current project` and `unread result available` to the accessibility label.
 
 Extend the renderer signature:
 
@@ -312,7 +323,7 @@ swift test --disable-sandbox --filter TouchBarLayoutStateTests
 
 Expected before Task 1 implementation: RED for missing expanded state. If Task 1 already made this state test green, continue to the controller wiring and use the physical Touch Bar as the integration gate.
 
-- [ ] **Step 3: Add native navigation items**
+- [ ] **Step 3: Add native-looking navigation items**
 
 In `TouchBarController`, add identifiers:
 
@@ -323,22 +334,24 @@ private static let collapseProjectsItemIdentifier =
     NSTouchBarItem.Identifier("dev.marlonjd.CodexTouchBar.projects.collapse")
 ```
 
-Create image-only native buttons:
+Create image-only buttons with non-template white symbols and explicit rounded backgrounds:
 
 ```swift
-private func makeProjectNavigationButton(
+static func makeNavigationButton(
     symbolName: String,
     accessibilityLabel: String,
-    action: Selector
+    target: AnyObject?,
+    action: Selector?
 ) -> NSButton {
-    let image = NSImage(
-        systemSymbolName: symbolName,
-        accessibilityDescription: accessibilityLabel
-    ) ?? NSImage()
-    let button = NSButton(image: image, target: self, action: action)
-    button.bezelStyle = .texturedRounded
+    let image = TouchBarImageRenderer.image(title: "", symbolName: symbolName)
+    let button = NSButton(image: image, target: target, action: action)
+    button.isBordered = false
     button.imagePosition = .imageOnly
     button.refusesFirstResponder = true
+    button.wantsLayer = true
+    button.layer?.backgroundColor = backgroundColor.cgColor
+    button.layer?.cornerRadius = cornerRadius
+    button.layer?.masksToBounds = true
     button.setAccessibilityLabel(accessibilityLabel)
     button.widthAnchor.constraint(
         equalToConstant: CGFloat(TouchBarProjectStripMetrics.navigationButtonWidth)
@@ -375,7 +388,7 @@ Set `projectStripWidthConstraint?.constant` from `TouchBarProjectStripMetrics.wi
 
 In the delegate, return custom items backed by `chevron.forward` and `chevron.backward` buttons for the new identifiers.
 
-- [ ] **Step 5: Persist native scrubber selection**
+- [ ] **Step 5: Persist scrubber selection and explicit cell styling**
 
 After every group reload, set:
 
@@ -383,7 +396,7 @@ After every group reload, set:
 scrubber.selectedIndex = groups.firstIndex(where: \.isSelected) ?? -1
 ```
 
-Keep `scrubber.selectionBackgroundStyle = .roundedBackground`. Remove the unconditional `selectedIndex = -1` after a valid project tap so the native background remains visible until the next live project-state refresh.
+Set `scrubber.selectionBackgroundStyle = nil` and let `ProjectScrubberItemView` draw the selected cell background explicitly. Remove the unconditional `selectedIndex = -1` after a valid project tap so the synchronized selected state remains stable until the next live project-state refresh.
 
 Update item sizing to add 13 points only when `group.hasUnread` so the separately rendered dot is not clipped.
 

@@ -64,6 +64,35 @@ import Testing
 }
 
 @MainActor
+@Test func selectedProjectUsesAnExplicitPersistentRoundedBackground() {
+    let presentation = ProjectScrubberItemView.presentation(
+        title: "codex_touchbar",
+        count: 1,
+        hasUnread: false,
+        isSelected: true,
+        isPlaceholder: false
+    )
+
+    #expect(presentation.backgroundColor == TouchBarControlStyle.backgroundColor)
+    #expect(presentation.cornerRadius == TouchBarControlStyle.cornerRadius)
+}
+
+@MainActor
+@Test func projectNavigationButtonUsesVisibleContentAndAnExplicitBackground() {
+    let button = TouchBarControlStyle.makeNavigationButton(
+        symbolName: "chevron.forward",
+        accessibilityLabel: "Expand projects",
+        target: nil,
+        action: nil
+    )
+
+    #expect(button.image?.isTemplate == false)
+    #expect(!button.isBordered)
+    #expect(button.layer?.backgroundColor == TouchBarControlStyle.backgroundColor.cgColor)
+    #expect(button.layer?.cornerRadius == TouchBarControlStyle.cornerRadius)
+}
+
+@MainActor
 @Test func trailingDotAddsIndependentIndicatorWidth() {
     let plain = TouchBarImageRenderer.image(title: "Project")
     let unread = TouchBarImageRenderer.image(

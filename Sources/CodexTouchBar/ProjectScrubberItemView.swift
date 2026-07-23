@@ -4,6 +4,8 @@ struct ProjectCellPresentation {
     let title: String
     let textColor: NSColor
     let trailingDotColor: NSColor?
+    let backgroundColor: NSColor?
+    let cornerRadius: CGFloat
 }
 
 @MainActor
@@ -39,13 +41,17 @@ final class ProjectScrubberItemView: NSScrubberItemView {
         title: String,
         count: Int,
         hasUnread: Bool,
-        isSelected _: Bool,
+        isSelected: Bool,
         isPlaceholder: Bool
     ) -> ProjectCellPresentation {
         ProjectCellPresentation(
             title: count > 1 ? "\(title) · \(count)" : title,
             textColor: isPlaceholder ? NSColor.white.withAlphaComponent(0.6) : .white,
-            trailingDotColor: hasUnread && !isPlaceholder ? .systemPurple : nil
+            trailingDotColor: hasUnread && !isPlaceholder ? .systemPurple : nil,
+            backgroundColor: isSelected && !isPlaceholder
+                ? TouchBarControlStyle.backgroundColor
+                : nil,
+            cornerRadius: TouchBarControlStyle.cornerRadius
         )
     }
 
@@ -70,6 +76,10 @@ final class ProjectScrubberItemView: NSScrubberItemView {
             textColor: presentation.textColor,
             trailingDotColor: presentation.trailingDotColor
         )
+        wantsLayer = true
+        layer?.backgroundColor = presentation.backgroundColor?.cgColor
+        layer?.cornerRadius = presentation.cornerRadius
+        layer?.masksToBounds = true
         var accessibilityLabel = presentation.title
         if isSelected {
             accessibilityLabel += ", current project"

@@ -33,6 +33,16 @@ import Testing
     #expect(state.mode == .projects)
 }
 
+@Test func settingCompletionReturnsToCompactProjects() {
+    var state = TouchBarLayoutState()
+
+    state.expandProjects()
+    state.show(.effort)
+    state.completeSelection()
+
+    #expect(state.mode == .projects)
+}
+
 @Test func projectStripMakesRoomForNavigationAndExpandsDeterministically() {
     #expect(
         TouchBarProjectStripMetrics.width(for: .projects, hasWeeklyLimit: true)
@@ -46,6 +56,11 @@ import Testing
     #expect(
         TouchBarProjectStripMetrics.width(for: .expandedProjects, hasWeeklyLimit: true)
             == TouchBarProjectStripMetrics.expandedWidth
+    )
+    #expect(
+        TouchBarProjectStripMetrics.expandedWidth
+            + TouchBarProjectStripMetrics.navigationSlotWidth
+            == 590
     )
     #expect(
         TouchBarProjectStripMetrics.expandedWidth

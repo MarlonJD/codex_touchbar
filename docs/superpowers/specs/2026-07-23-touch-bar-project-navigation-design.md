@@ -7,8 +7,8 @@ Make project status quieter and provide a dedicated expanded project browser whe
 ## Compact Project Mode
 
 - Keep the horizontally scrollable project scrubber in the normal Touch Bar layout.
-- Reduce its width by exactly the width and spacing required for one native navigation button.
-- Add a trailing `>` button using the same `texturedRounded` AppKit button treatment as the existing Touch Bar controls.
+- Reduce its width by exactly the width and spacing required for one navigation button.
+- Add a trailing `>` button with an explicitly drawn rounded background matching the existing system Touch Bar controls.
 - Keep weekly limit, Effort, and Speed controls unchanged.
 
 ## Expanded Project Mode
@@ -31,8 +31,8 @@ Make project status quieter and provide a dedicated expanded project browser whe
 
 - Extend `TouchBarLayoutMode` with a dedicated expanded-project state.
 - Keep the expanded/collapsed transition in `TouchBarLayoutState`.
-- Add separate expand and collapse Touch Bar item identifiers and native `NSButton` views in `TouchBarController`.
-- Keep the selected group as the scrubber's persistent `selectedIndex` and use the native `.roundedBackground` selection style.
+- Add separate expand and collapse Touch Bar item identifiers and styled `NSButton` views in `TouchBarController`.
+- Keep the selected group as the scrubber's persistent `selectedIndex`, but draw the selected cell background explicitly because the AppKit selection decoration is invisible on the private system-modal Touch Bar surface.
 - Extend `TouchBarImageRenderer` to draw an optional independently colored trailing indicator so the unread dot can be purple while the rest remains white.
 
 ## Testing

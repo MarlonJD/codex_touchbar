@@ -32,7 +32,7 @@ Make project status quieter and provide a dedicated expanded project browser whe
 - Extend `TouchBarLayoutMode` with a dedicated expanded-project state.
 - Keep the expanded/collapsed transition in `TouchBarLayoutState`.
 - Add separate expand and collapse Touch Bar item identifiers and native `NSButton` views in `TouchBarController`.
-- Let `ProjectScrubberItemView` own selected-cell background styling.
+- Keep the selected group as the scrubber's persistent `selectedIndex` and use the native `.roundedBackground` selection style.
 - Extend `TouchBarImageRenderer` to draw an optional independently colored trailing indicator so the unread dot can be purple while the rest remains white.
 
 ## Testing

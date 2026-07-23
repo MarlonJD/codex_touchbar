@@ -23,6 +23,36 @@ import Testing
     #expect(state.mode == .projects)
 }
 
+@Test func projectBrowserExpandsAndCollapses() {
+    var state = TouchBarLayoutState()
+
+    state.expandProjects()
+    #expect(state.mode == .expandedProjects)
+
+    state.collapseProjects()
+    #expect(state.mode == .projects)
+}
+
+@Test func projectStripMakesRoomForNavigationAndExpandsDeterministically() {
+    #expect(
+        TouchBarProjectStripMetrics.width(for: .projects, hasWeeklyLimit: true)
+            == TouchBarProjectStripMetrics.compactWidthWithWeeklyLimit
+    )
+    #expect(
+        TouchBarProjectStripMetrics.compactWidthWithWeeklyLimit
+            + TouchBarProjectStripMetrics.navigationSlotWidth
+            == 390
+    )
+    #expect(
+        TouchBarProjectStripMetrics.width(for: .expandedProjects, hasWeeklyLimit: true)
+            == TouchBarProjectStripMetrics.expandedWidth
+    )
+    #expect(
+        TouchBarProjectStripMetrics.expandedWidth
+            > TouchBarProjectStripMetrics.compactWidth
+    )
+}
+
 @Test func helperKeepsTheSystemCloseBoxForTheNativeControlStrip() {
     var state = TouchBarLayoutState()
     #expect(state.showsSystemCloseBox)

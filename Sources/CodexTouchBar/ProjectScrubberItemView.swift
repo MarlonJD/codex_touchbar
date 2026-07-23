@@ -1,5 +1,11 @@
 import AppKit
 
+struct ProjectCellPresentation {
+    let title: String
+    let textColor: NSColor
+    let trailingDotColor: NSColor?
+}
+
 @MainActor
 final class ProjectScrubberItemView: NSScrubberItemView {
     private let contentView = NSImageView()
@@ -20,9 +26,27 @@ final class ProjectScrubberItemView: NSScrubberItemView {
         hasUnread: Bool,
         isSelected: Bool = false
     ) -> String {
-        let countedTitle = count > 1 ? "\(title) · \(count)" : title
-        let selectedTitle = isSelected ? "▶ \(countedTitle)" : countedTitle
-        return hasUnread ? "\(selectedTitle) ●" : selectedTitle
+        presentation(
+            title: title,
+            count: count,
+            hasUnread: hasUnread,
+            isSelected: isSelected,
+            isPlaceholder: false
+        ).title
+    }
+
+    static func presentation(
+        title: String,
+        count: Int,
+        hasUnread: Bool,
+        isSelected _: Bool,
+        isPlaceholder: Bool
+    ) -> ProjectCellPresentation {
+        ProjectCellPresentation(
+            title: count > 1 ? "\(title) · \(count)" : title,
+            textColor: isPlaceholder ? NSColor.white.withAlphaComponent(0.6) : .white,
+            trailingDotColor: hasUnread && !isPlaceholder ? .systemPurple : nil
+        )
     }
 
     func configure(
@@ -32,29 +56,21 @@ final class ProjectScrubberItemView: NSScrubberItemView {
         isSelected: Bool = false,
         isPlaceholder: Bool = false
     ) {
-        let displayTitle = Self.displayTitle(
+        let presentation = Self.presentation(
             title: title,
             count: count,
             hasUnread: hasUnread,
-            isSelected: isSelected
+            isSelected: isSelected,
+            isPlaceholder: isPlaceholder
         )
-        let textColor: NSColor
-        if isPlaceholder {
-            textColor = NSColor.white.withAlphaComponent(0.6)
-        } else if isSelected {
-            textColor = .systemYellow
-        } else if hasUnread {
-            textColor = .systemPurple
-        } else {
-            textColor = .white
-        }
         contentView.image = TouchBarImageRenderer.image(
-            title: displayTitle,
+            title: presentation.title,
             symbolName: isPlaceholder ? "pause.circle" : "folder.fill",
             font: .systemFont(ofSize: 12, weight: .medium),
-            textColor: textColor
+            textColor: presentation.textColor,
+            trailingDotColor: presentation.trailingDotColor
         )
-        var accessibilityLabel = displayTitle
+        var accessibilityLabel = presentation.title
         if isSelected {
             accessibilityLabel += ", current project"
         }

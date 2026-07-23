@@ -34,38 +34,45 @@ import Testing
 }
 
 @MainActor
-@Test func unreadProjectTitleIncludesAnAttentionDot() {
-    #expect(
-        ProjectScrubberItemView.displayTitle(
-            title: "aviaSurveil360",
-            count: 2,
-            hasUnread: true
-        ) == "aviaSurveil360 · 2 ●"
+@Test func unreadProjectKeepsWhiteContentAndUsesOnlyAPurpleDot() {
+    let presentation = ProjectScrubberItemView.presentation(
+        title: "aviaCore",
+        count: 2,
+        hasUnread: true,
+        isSelected: false,
+        isPlaceholder: false
     )
+
+    #expect(presentation.title == "aviaCore · 2")
+    #expect(presentation.textColor == .white)
+    #expect(presentation.trailingDotColor == .systemPurple)
 }
 
 @MainActor
-@Test func selectedProjectTitleIncludesALeadingMarker() {
-    #expect(
-        ProjectScrubberItemView.displayTitle(
-            title: "codex_touchbar",
-            count: 1,
-            hasUnread: false,
-            isSelected: true
-        ) == "▶ codex_touchbar"
+@Test func selectedProjectDoesNotAddAnArrowOrYellowText() {
+    let presentation = ProjectScrubberItemView.presentation(
+        title: "codex_touchbar",
+        count: 1,
+        hasUnread: false,
+        isSelected: true,
+        isPlaceholder: false
     )
+
+    #expect(presentation.title == "codex_touchbar")
+    #expect(presentation.textColor == .white)
+    #expect(presentation.trailingDotColor == nil)
 }
 
 @MainActor
-@Test func selectedUnreadProjectKeepsBothCurrentAndAttentionMarkers() {
-    #expect(
-        ProjectScrubberItemView.displayTitle(
-            title: "codex_touchbar",
-            count: 1,
-            hasUnread: true,
-            isSelected: true
-        ) == "▶ codex_touchbar ●"
+@Test func trailingDotAddsIndependentIndicatorWidth() {
+    let plain = TouchBarImageRenderer.image(title: "Project")
+    let unread = TouchBarImageRenderer.image(
+        title: "Project",
+        trailingDotColor: .systemPurple
     )
+
+    #expect(unread.size.width > plain.size.width)
+    #expect(unread.size.height == plain.size.height)
 }
 
 @Test func effortChoicesMatchCodexWhileUltraTargetsTheHiddenMaxStep() {

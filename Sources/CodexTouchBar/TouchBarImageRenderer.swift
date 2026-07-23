@@ -6,7 +6,8 @@ enum TouchBarImageRenderer {
         title: String,
         symbolName: String? = nil,
         font: NSFont = .systemFont(ofSize: 13, weight: .medium),
-        textColor: NSColor = .white
+        textColor: NSColor = .white,
+        trailingDotColor: NSColor? = nil
     ) -> NSImage {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -14,8 +15,12 @@ enum TouchBarImageRenderer {
         ]
         let textSize = (title as NSString).size(withAttributes: attributes)
         let symbolSize = NSSize(width: 16, height: 16)
-        let spacing: CGFloat = symbolName == nil ? 0 : 6
-        let width = ceil(textSize.width) + (symbolName == nil ? 0 : symbolSize.width + spacing)
+        let symbolSpacing: CGFloat = symbolName == nil ? 0 : 6
+        let indicatorDiameter: CGFloat = 7
+        let indicatorSpacing: CGFloat = trailingDotColor == nil ? 0 : 6
+        let width = ceil(textSize.width)
+            + (symbolName == nil ? 0 : symbolSize.width + symbolSpacing)
+            + (trailingDotColor == nil ? 0 : indicatorSpacing + indicatorDiameter)
         let height = max(18, ceil(textSize.height))
         let size = NSSize(width: max(width, 1), height: height)
 
@@ -40,13 +45,24 @@ enum TouchBarImageRenderer {
                     operation: .sourceOver,
                     fraction: 1
                 )
-                textX = symbolSize.width + spacing
+                textX = symbolSize.width + symbolSpacing
             }
 
             (title as NSString).draw(
                 at: NSPoint(x: textX, y: floor((rect.height - textSize.height) / 2)),
                 withAttributes: attributes
             )
+            if let trailingDotColor {
+                trailingDotColor.setFill()
+                NSBezierPath(
+                    ovalIn: NSRect(
+                        x: textX + ceil(textSize.width) + indicatorSpacing,
+                        y: floor((rect.height - indicatorDiameter) / 2),
+                        width: indicatorDiameter,
+                        height: indicatorDiameter
+                    )
+                ).fill()
+            }
             return true
         }
         image.isTemplate = false

@@ -1,6 +1,6 @@
 # Codex Touch Bar
 
-A standalone macOS menu bar helper that shows projects with currently active Codex tasks on a MacBook Pro Touch Bar. It does not require BetterTouchTool and does not modify or re-sign the Codex app.
+A standalone macOS menu bar helper that shows projects with active Codex tasks or unread results on a MacBook Pro Touch Bar. It does not require BetterTouchTool and does not modify or re-sign the Codex app.
 
 When Codex is the frontmost app, the Touch Bar shows a horizontally scrollable project strip:
 
@@ -8,7 +8,7 @@ When Codex is the frontmost app, the Touch Bar shows a horizontally scrollable p
 [folder] aviaSurveil360 · 2   [folder] flutter_desktop_up…   [folder] Unnamed Project
 ```
 
-Tapping a project opens its first active task. Repeated taps cycle through that project's active tasks and then wrap back to the first one.
+Tapping a project opens unread results first, then cycles through that project's active tasks and wraps back to the first one.
 Projects with an unread Codex result are highlighted in purple with a dot.
 
 The right side shows the remaining weekly Codex allowance and provides native Touch Bar popovers for the currently visible task:
@@ -56,7 +56,7 @@ Optional run modes:
 Create a notarized release archive with:
 
 ```bash
-./script/build_release.sh 0.2.0
+./script/build_release.sh 0.2.1
 ```
 
 The release script requires the Developer ID identity and `desktop-updater-notary` Keychain profile. It signs with hardened runtime, submits the archive to Apple, staples the ticket, validates it with Gatekeeper, and writes the final ZIP under `dist/release`.

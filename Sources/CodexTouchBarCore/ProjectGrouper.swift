@@ -15,13 +15,7 @@ public struct ProjectGrouper: Sendable {
         self.homeDirectory = homeDirectory.standardizedFileURL
     }
 
-    public func groups(
-        from threads: [ActiveThread],
-        unreadWorkingDirectories: [URL] = []
-    ) -> [ProjectGroup] {
-        let unreadProjectIDs = Set(
-            unreadWorkingDirectories.map { projectIdentity(for: $0).id }
-        )
+    public func groups(from threads: [ActiveThread]) -> [ProjectGroup] {
         var grouped: [String: (name: String, isUnnamed: Bool, threads: [ActiveThread])] = [:]
 
         for thread in threads {
@@ -36,16 +30,22 @@ public struct ProjectGrouper: Sendable {
                 id: id,
                 name: entry.name,
                 threads: entry.threads.sorted {
+                    if $0.isUnread != $1.isUnread {
+                        return $0.isUnread
+                    }
                     if $0.startedAt == $1.startedAt {
                         return $0.id < $1.id
                     }
                     return $0.startedAt < $1.startedAt
                 },
                 isUnnamed: entry.isUnnamed,
-                hasUnread: unreadProjectIDs.contains(id)
+                hasUnread: entry.threads.contains { $0.isUnread }
             )
         }
         .sorted { lhs, rhs in
+            if lhs.hasUnread != rhs.hasUnread {
+                return lhs.hasUnread
+            }
             if lhs.isUnnamed != rhs.isUnnamed {
                 return !lhs.isUnnamed
             }

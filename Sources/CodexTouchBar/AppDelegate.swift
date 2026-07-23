@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var latestWeeklyLimit: WeeklyLimitUsage?
     private var latestGroupCount = 0
     private var latestThreadCount = 0
+    private var latestUnreadThreadCount = 0
     private var transientStatus: (message: String, expiresAt: Date)?
 
     private var isEnabled: Bool {
@@ -146,10 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else {
                 return
             }
-            let groups = grouper.groups(
-                from: snapshot.threads,
-                unreadWorkingDirectories: snapshot.unreadWorkingDirectories
-            )
+            let groups = grouper.groups(from: snapshot.threads)
             self.apply(groups: groups, weeklyLimit: snapshot.weeklyLimit)
             self.refreshInFlight = false
         }
@@ -159,7 +157,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if RefreshPolicy.shouldApply(previous: latestGroups, next: groups) {
             latestGroups = groups
             latestGroupCount = groups.count
-            latestThreadCount = groups.reduce(0) { $0 + $1.threads.count }
+            latestThreadCount = groups.reduce(0) {
+                $0 + $1.threads.filter(\.isActive).count
+            }
+            latestUnreadThreadCount = groups.reduce(0) {
+                $0 + $1.threads.filter(\.isUnread).count
+            }
             cycler.retainGroups(Set(groups.map(\.id)))
             touchBarController.update(groups: groups)
         }
@@ -183,12 +186,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         transientStatus = nil
 
-        if latestThreadCount == 0 {
+        if latestThreadCount == 0, latestUnreadThreadCount == 0 {
             statusMenuItem?.title = "No active Codex tasks"
         } else {
             let taskWord = latestThreadCount == 1 ? "task" : "tasks"
             let projectWord = latestGroupCount == 1 ? "project" : "projects"
-            statusMenuItem?.title = "\(latestThreadCount) active \(taskWord) · \(latestGroupCount) \(projectWord)"
+            let unreadStatus = latestUnreadThreadCount > 0
+                ? " · \(latestUnreadThreadCount) unread"
+                : ""
+            statusMenuItem?.title = "\(latestThreadCount) active \(taskWord)\(unreadStatus) · \(latestGroupCount) \(projectWord)"
         }
     }
 

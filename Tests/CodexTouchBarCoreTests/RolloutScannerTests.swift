@@ -160,7 +160,7 @@ import Testing
     #expect(snapshot.weeklyLimit?.remainingPercent == 93)
 }
 
-@Test func reportsUnreadProjectDirectoriesWithoutTreatingCompletedTasksAsActive() async throws {
+@Test func reportsCompletedUnreadTasksAlongsideActiveTasks() async throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -194,8 +194,11 @@ import Testing
     )
     let snapshot = await scanner.scanSnapshot()
 
-    #expect(snapshot.threads.map(\.id) == ["active-thread"])
-    #expect(snapshot.unreadWorkingDirectories.map(\.path) == [projectPath])
+    #expect(Set(snapshot.threads.map(\.id)) == ["active-thread", "unread-completed-thread"])
+    #expect(snapshot.threads.first { $0.id == "active-thread" }?.isActive == true)
+    #expect(snapshot.threads.first { $0.id == "active-thread" }?.isUnread == false)
+    #expect(snapshot.threads.first { $0.id == "unread-completed-thread" }?.isActive == false)
+    #expect(snapshot.threads.first { $0.id == "unread-completed-thread" }?.isUnread == true)
 }
 
 @Test func weeklyLimitRemainingPercentageIsRoundedAndClamped() {

@@ -19,21 +19,53 @@ import Testing
     )
 
     let threads = [
-        makeThread(id: "avia-2", cwd: repositoryChild, startedAt: 2),
+        makeThread(id: "avia-2", cwd: repositoryChild, startedAt: 2, isUnread: true),
         makeThread(id: "unnamed", cwd: unnamedDirectory, startedAt: 3),
         makeThread(id: "avia-1", cwd: repositoryRoot, startedAt: 1),
     ]
     let grouper = ProjectGrouper(scratchRoot: scratchRoot, homeDirectory: root)
-    let groups = grouper.groups(
-        from: threads,
-        unreadWorkingDirectories: [repositoryChild]
-    )
+    let groups = grouper.groups(from: threads)
 
     #expect(groups.map(\.name) == ["AviaSurveil360", "Unnamed Project"])
-    #expect(groups[0].threads.map(\.id) == ["avia-1", "avia-2"])
+    #expect(groups[0].threads.map(\.id) == ["avia-2", "avia-1"])
     #expect(groups[0].hasUnread)
     #expect(!groups[1].hasUnread)
     #expect(groups[1].isUnnamed)
+}
+
+@Test func unreadProjectsSortAheadOfMoreRecentActiveProjects() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let activeProject = root.appendingPathComponent("active", isDirectory: true)
+    let unreadProject = root.appendingPathComponent("unread", isDirectory: true)
+    for repository in [activeProject, unreadProject] {
+        try FileManager.default.createDirectory(
+            at: repository.appendingPathComponent(".git", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+
+    let threads = [
+        makeThread(
+            id: "active",
+            cwd: activeProject,
+            startedAt: 2,
+            projectRecencyAt: 20
+        ),
+        makeThread(
+            id: "unread",
+            cwd: unreadProject,
+            startedAt: 1,
+            projectRecencyAt: 10,
+            isActive: false,
+            isUnread: true
+        ),
+    ]
+    let grouper = ProjectGrouper(homeDirectory: root)
+
+    #expect(grouper.groups(from: threads).map(\.name) == ["unread", "active"])
 }
 
 @Test func ordersProjectGroupsByCodexProjectRecency() throws {
@@ -90,13 +122,17 @@ private func makeThread(
     cwd: URL,
     startedAt: TimeInterval,
     updatedAt: TimeInterval = 10,
-    projectRecencyAt: TimeInterval? = nil
+    projectRecencyAt: TimeInterval? = nil,
+    isActive: Bool = true,
+    isUnread: Bool = false
 ) -> ActiveThread {
     ActiveThread(
         id: id,
         cwd: cwd,
         startedAt: Date(timeIntervalSince1970: startedAt),
         updatedAt: Date(timeIntervalSince1970: updatedAt),
-        projectRecencyAt: projectRecencyAt.map(Date.init(timeIntervalSince1970:))
+        projectRecencyAt: projectRecencyAt.map(Date.init(timeIntervalSince1970:)),
+        isActive: isActive,
+        isUnread: isUnread
     )
 }

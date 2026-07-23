@@ -72,14 +72,11 @@ public actor RolloutScanner {
         let unreadThreadIDs = unreadThreadIDs(fileManager: fileManager)
         var seenURLs = Set<URL>()
         var weeklyLimits: [WeeklyLimitUsage] = []
-        var unreadWorkingDirectories = Set<URL>()
-        let activeThreads: [ActiveThread]
+        let visibleThreads: [ActiveThread]
 
         if let indexedRoots = indexedThreadRoots() {
-            activeThreads = indexedRoots.compactMap { root in
-                if unreadThreadIDs.contains(root.id) {
-                    unreadWorkingDirectories.insert(root.cwd.standardizedFileURL)
-                }
+            visibleThreads = indexedRoots.compactMap { root in
+                let isUnread = unreadThreadIDs.contains(root.id)
                 let records = root.rolloutURLs.compactMap { url in
                     cachedRecord(
                         at: url,
@@ -91,20 +88,23 @@ public actor RolloutScanner {
                 }
                 weeklyLimits.append(contentsOf: records.compactMap(\.weeklyLimit))
                 let activeRecords = records.filter(\.isActive)
+                let activeStartedAt = activeRecords.map(\.thread.startedAt).min()
 
-                guard let startedAt = activeRecords.map(\.thread.startedAt).min() else {
+                guard activeStartedAt != nil || isUnread else {
                     return nil
                 }
                 return ActiveThread(
                     id: root.id,
                     cwd: root.cwd,
-                    startedAt: startedAt,
+                    startedAt: activeStartedAt ?? root.updatedAt,
                     updatedAt: root.updatedAt,
-                    projectRecencyAt: root.projectRecencyAt
+                    projectRecencyAt: root.projectRecencyAt,
+                    isActive: activeStartedAt != nil,
+                    isUnread: isUnread
                 )
             }
         } else {
-            var activeThreadsByID: [String: ActiveThread] = [:]
+            var visibleThreadsByID: [String: ActiveThread] = [:]
             for url in fallbackRolloutURLs(fileManager: fileManager, resourceKeys: resourceKeys) {
                 guard let record = cachedRecord(
                     at: url,
@@ -118,22 +118,32 @@ public actor RolloutScanner {
                 if let weeklyLimit = record.weeklyLimit {
                     weeklyLimits.append(weeklyLimit)
                 }
-                if unreadThreadIDs.contains(record.thread.id) {
-                    unreadWorkingDirectories.insert(record.thread.cwd.standardizedFileURL)
-                }
-                guard record.isActive else {
+                let isUnread = unreadThreadIDs.contains(record.thread.id)
+                guard record.isActive || isUnread else {
                     continue
                 }
-                let existing = activeThreadsByID[record.thread.id]
-                if existing == nil || record.thread.updatedAt > existing!.updatedAt {
-                    activeThreadsByID[record.thread.id] = record.thread
+                let visibleThread = ActiveThread(
+                    id: record.thread.id,
+                    cwd: record.thread.cwd,
+                    startedAt: record.thread.startedAt,
+                    updatedAt: record.thread.updatedAt,
+                    projectRecencyAt: record.thread.projectRecencyAt,
+                    isActive: record.isActive,
+                    isUnread: isUnread
+                )
+                let existing = visibleThreadsByID[record.thread.id]
+                if existing == nil || visibleThread.updatedAt > existing!.updatedAt {
+                    visibleThreadsByID[record.thread.id] = visibleThread
                 }
             }
-            activeThreads = Array(activeThreadsByID.values)
+            visibleThreads = Array(visibleThreadsByID.values)
         }
 
         cache = cache.filter { seenURLs.contains($0.key) }
-        let sortedThreads = activeThreads.sorted {
+        let sortedThreads = visibleThreads.sorted {
+            if $0.isUnread != $1.isUnread {
+                return $0.isUnread
+            }
             if $0.startedAt == $1.startedAt {
                 return $0.id < $1.id
             }
@@ -142,13 +152,7 @@ public actor RolloutScanner {
         let latestWeeklyLimit = weeklyLimits.max {
             $0.recordedAt < $1.recordedAt
         }
-        return RolloutSnapshot(
-            threads: sortedThreads,
-            weeklyLimit: latestWeeklyLimit,
-            unreadWorkingDirectories: unreadWorkingDirectories.sorted {
-                $0.path < $1.path
-            }
-        )
+        return RolloutSnapshot(threads: sortedThreads, weeklyLimit: latestWeeklyLimit)
     }
 
     private func unreadThreadIDs(fileManager: FileManager) -> Set<String> {
@@ -276,7 +280,8 @@ public actor RolloutScanner {
                 id: record.thread.id,
                 cwd: record.thread.cwd,
                 startedAt: startedAt,
-                updatedAt: updatedAt
+                updatedAt: updatedAt,
+                isActive: isActive
             ),
             isActive: isActive,
             weeklyLimit: update.latestWeeklyLimit ?? record.weeklyLimit
@@ -297,7 +302,8 @@ public actor RolloutScanner {
             id: metadata.id,
             cwd: metadata.cwd,
             startedAt: activeStartedAt ?? updatedAt,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            isActive: activeStartedAt != nil
         )
         return RolloutRecord(
             thread: thread,

@@ -19,16 +19,10 @@ public struct WeeklyLimitUsage: Equatable, Sendable {
 public struct RolloutSnapshot: Equatable, Sendable {
     public let threads: [ActiveThread]
     public let weeklyLimit: WeeklyLimitUsage?
-    public let unreadWorkingDirectories: [URL]
 
-    public init(
-        threads: [ActiveThread],
-        weeklyLimit: WeeklyLimitUsage?,
-        unreadWorkingDirectories: [URL] = []
-    ) {
+    public init(threads: [ActiveThread], weeklyLimit: WeeklyLimitUsage?) {
         self.threads = threads
         self.weeklyLimit = weeklyLimit
-        self.unreadWorkingDirectories = unreadWorkingDirectories
     }
 }
 
@@ -38,19 +32,25 @@ public struct ActiveThread: Equatable, Sendable {
     public let startedAt: Date
     public let updatedAt: Date
     public let projectRecencyAt: Date
+    public let isActive: Bool
+    public let isUnread: Bool
 
     public init(
         id: String,
         cwd: URL,
         startedAt: Date,
         updatedAt: Date,
-        projectRecencyAt: Date? = nil
+        projectRecencyAt: Date? = nil,
+        isActive: Bool = true,
+        isUnread: Bool = false
     ) {
         self.id = id
         self.cwd = cwd
         self.startedAt = startedAt
         self.updatedAt = updatedAt
         self.projectRecencyAt = projectRecencyAt ?? updatedAt
+        self.isActive = isActive
+        self.isUnread = isUnread
     }
 }
 

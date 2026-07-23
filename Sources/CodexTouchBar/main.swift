@@ -22,12 +22,9 @@ private func runDiagnostics() {
         } else {
             print("Weekly limit\tUnavailable")
         }
-        print("Unread project directories\t\(snapshot.unreadWorkingDirectories.count)")
+        print("Unread threads\t\(snapshot.threads.filter(\.isUnread).count)")
 
-        let groups = grouper.groups(
-            from: snapshot.threads,
-            unreadWorkingDirectories: snapshot.unreadWorkingDirectories
-        )
+        let groups = grouper.groups(from: snapshot.threads)
         if groups.isEmpty {
             print("No active Codex tasks")
         } else {

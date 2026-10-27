@@ -1,5 +1,6 @@
 import AppKit
 import CodexTouchBarCore
+import OSLog
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -7,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let enabledDefaultsKey = "touchBarEnabled"
 
     private let scanner = RolloutScanner()
+    private let accountRateLimitClient = CodexAccountRateLimitClient()
+    private let desktopStateClient = CodexDesktopStateClient()
     private let grouper = ProjectGrouper()
     private let touchBarController = TouchBarController()
     private let accessibilityController = CodexAccessibilityController()
@@ -16,8 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var enabledMenuItem: NSMenuItem?
     private var refreshTimer: Timer?
     private var refreshInFlight = false
+    private var limitRefreshInFlight = false
     private var latestGroups: [ProjectGroup]?
     private var latestWeeklyLimit: WeeklyLimitUsage?
+    private var selectedThreadIdentity: DesktopThreadIdentity?
+    private let composerLogger = Logger(subsystem: "dev.marlonjd.CodexTouchBar", category: "composer-resolution")
+    private var lastComposerStatus: String?
     private var latestGroupCount = 0
     private var latestThreadCount = 0
     private var latestUnreadThreadCount = 0
@@ -50,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         configureStatusItem()
         LaunchAtLoginController.registerIfNeeded()
+        desktopStateClient.start()
 
         touchBarController.onProjectSelected = { [weak self] group in
             self?.openNextThread(in: group)
@@ -75,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         refreshTimer?.invalidate()
+        desktopStateClient.stop()
         touchBarController.dismiss()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
@@ -137,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestRefresh() {
+        requestLimitRefresh()
         guard !refreshInFlight else {
             return
         }
@@ -147,20 +157,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else {
                 return
             }
-            let selectedProjectName = self.isCodexFrontmost
-                ? self.accessibilityController.selectedSidebarProjectName()
+            let visible = self.isCodexFrontmost
+                ? self.accessibilityController.visibleContext()
                 : nil
-            let groups = grouper.groups(
-                from: snapshot.threads,
-                selectedProjectRoots: snapshot.selectedProjectRoots,
-                selectedProjectName: selectedProjectName
+            let selectedIdentity = visible?.selectedTaskLabel.flatMap {
+                self.desktopStateClient.state.identity(matchingSelectedLabel: $0)
+            }
+            let settings = selectedIdentity.flatMap { self.desktopStateClient.state.settings(for: $0) }
+            self.selectedThreadIdentity = selectedIdentity
+            let display = (visible?.composer ?? ComposerDisplayState()).resolving(
+                settings: settings,
+                fastTitle: settings.flatMap { CodexModelCatalog.speedTitle(for: $0) }
             )
-            self.apply(groups: groups, weeklyLimit: snapshot.weeklyLimit)
+            let status = "frontmost=\(self.isCodexFrontmost) selectedLabel=\(visible?.selectedTaskLabel != nil) matchedThread=\(selectedIdentity != nil) settings=\(settings != nil) model=\(display.modelTitle != nil) speed=\(display.speedTitle != nil)"
+            if status != self.lastComposerStatus {
+                self.lastComposerStatus = status
+                self.composerLogger.notice("Composer resolution: \(status, privacy: .public)")
+            }
+            self.touchBarController.showComposer(display)
+            let groups = grouper.groups(
+                from: self.desktopStateClient.state.merging(localThreads: snapshot.threads),
+                selectedProjectRoots: snapshot.selectedProjectRoots,
+                selectedProjectName: visible?.projectName,
+                selectedThreadIdentity: selectedIdentity
+            )
+            self.apply(groups: groups)
             self.refreshInFlight = false
         }
     }
 
-    private func apply(groups: [ProjectGroup], weeklyLimit: WeeklyLimitUsage?) {
+    private func requestLimitRefresh() {
+        guard !limitRefreshInFlight else { return }
+        limitRefreshInFlight = true
+        Task { [weak self, accountRateLimitClient] in
+            let usage = await accountRateLimitClient.weeklyLimit()
+            guard let self else { return }
+            if self.latestWeeklyLimit != usage {
+                self.latestWeeklyLimit = usage
+                self.touchBarController.showWeeklyLimit(usage)
+            }
+            self.limitRefreshInFlight = false
+        }
+    }
+
+    private func apply(groups: [ProjectGroup]) {
         if RefreshPolicy.shouldApply(previous: latestGroups, next: groups) {
             latestGroups = groups
             latestGroupCount = groups.count
@@ -174,10 +214,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             touchBarController.update(groups: groups)
         }
 
-        if latestWeeklyLimit != weeklyLimit {
-            latestWeeklyLimit = weeklyLimit
-            touchBarController.showWeeklyLimit(weeklyLimit)
-        }
         updateStatusText()
     }
 
@@ -239,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openNextThread(in group: ProjectGroup) {
         guard let thread = cycler.nextThread(in: group),
-              let url = URL(string: "codex://threads/\(thread.id)") else {
+              let url = thread.navigationURL else {
             return
         }
         NSWorkspace.shared.open(url)
@@ -250,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 try await accessibilityController.apply(effort: choice)
-                touchBarController.showSelectedEffort(choice)
+                requestRefresh()
                 showTransientStatus("Effort set to \(choice.title)")
             } catch {
                 showSettingError(error)
@@ -262,8 +298,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await accessibilityController.apply(speed: choice)
-                touchBarController.showSelectedSpeed(choice)
+                let identity = selectedThreadIdentity
+                try await accessibilityController.apply(speed: choice) { [self] in
+                    identity.flatMap { desktopStateClient.state.settings(for: $0) }
+                }
+                requestRefresh()
                 showTransientStatus("Speed set to \(choice.title)")
             } catch {
                 showSettingError(error)

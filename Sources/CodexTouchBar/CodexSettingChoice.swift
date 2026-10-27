@@ -5,6 +5,7 @@ enum EffortChoice: String, CaseIterable, Sendable {
     case medium
     case high
     case xhigh
+    case max
     case ultra
 
     static let commandOptionCount = 6
@@ -15,6 +16,7 @@ enum EffortChoice: String, CaseIterable, Sendable {
         case .medium: 1
         case .high: 2
         case .xhigh: 3
+        case .max: 4
         case .ultra: 5
         }
     }
@@ -25,6 +27,7 @@ enum EffortChoice: String, CaseIterable, Sendable {
         case .medium: localized(turkish: "Orta", english: "Medium")
         case .high: localized(turkish: "Yüksek", english: "High")
         case .xhigh: localized(turkish: "Çok Yüksek", english: "Extra High")
+        case .max: "Max"
         case .ultra: "Ultra"
         }
     }
@@ -35,6 +38,7 @@ enum EffortChoice: String, CaseIterable, Sendable {
         case .medium: ["Orta", "Medium"]
         case .high: ["Yüksek", "High"]
         case .xhigh: ["Çok Yüksek", "Extra High", "Very High"]
+        case .max: ["Max", "Maximum", "Maksimum"]
         case .ultra: ["Ultra"]
         }
     }
@@ -46,7 +50,7 @@ enum SpeedChoice: String, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .standard: localized(turkish: "Standart", english: "Standard")
+        case .standard: "1x"
         case .fast: localized(turkish: "Hızlı", english: "Fast")
         }
     }

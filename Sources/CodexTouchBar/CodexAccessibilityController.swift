@@ -1,10 +1,14 @@
 import AppKit
 import ApplicationServices
 import CodexTouchBarCore
+import OSLog
 
 @MainActor
 final class CodexAccessibilityController {
     private static let codexBundleIdentifier = "com.openai.codex"
+    private let logger = Logger(subsystem: "dev.marlonjd.CodexTouchBar", category: "composer-reader")
+    private var lastReadStatus: String?
+    private var activatedProcessIdentifier: pid_t?
 
     enum ControlKind {
         case effort
@@ -68,46 +72,133 @@ final class CodexAccessibilityController {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    func selectedSidebarProjectName() -> String? {
-        guard AXIsProcessTrusted(),
-              let application = NSRunningApplication.runningApplications(
+    struct VisibleContext {
+        let projectName: String?
+        let selectedTaskLabel: String?
+        let composer: ComposerDisplayState
+    }
+
+    func visibleContext() -> VisibleContext {
+        guard AXIsProcessTrusted() else {
+            reportReadStatus("accessibilityPermission=false")
+            return VisibleContext(projectName: nil, selectedTaskLabel: nil, composer: .init())
+        }
+        guard let application = NSRunningApplication.runningApplications(
                   withBundleIdentifier: Self.codexBundleIdentifier
               ).first else {
-            return nil
+            reportReadStatus("codexRunning=false")
+            return VisibleContext(projectName: nil, selectedTaskLabel: nil, composer: .init())
         }
-
         let root = AXUIElementCreateApplication(application.processIdentifier)
-        _ = enableEnhancedAccessibility(for: root)
-        let rows = accessibilityElements(in: root, sidebarOnly: true).compactMap {
+        let activation = enableEnhancedAccessibility(for: root)
+        var appSettable = DarwinBoolean(false)
+        let appCapability = AXUIElementIsAttributeSettable(root, AccessibilityRuntimePolicy.activationAttribute as CFString, &appSettable)
+        var windowSettable = DarwinBoolean(false)
+        var windowCapability = AXError.invalidUIElement
+        if let value = attribute(kAXFocusedWindowAttribute, of: root), CFGetTypeID(value) == AXUIElementGetTypeID() {
+            windowCapability = AXUIElementIsAttributeSettable(unsafeDowncast(value, to: AXUIElement.self), AccessibilityRuntimePolicy.activationAttribute as CFString, &windowSettable)
+        }
+        let elements = accessibilityElements(in: root)
+        let windowFrame = elements.first.flatMap { frame(of: $0.element) }
+        let sidebarLeft = windowFrame?.minX ?? 0
+        var selectedTask: String?
+        var controlLabels: [String] = []
+        var frameCount = 0
+        var currentCount = 0
+        var menuCount = 0
+        for snapshot in elements {
+            guard let frame = frame(of: snapshot.element), frame.height > 0 else { continue }
+            frameCount += 1
+            if isCurrentPage(snapshot.element) { currentCount += 1 }
+            let classes = stringListAttribute("AXDOMClassList", of: snapshot.element)
+            if frame.minX < sidebarLeft + 300,
+               isCurrentPage(snapshot.element),
+               !classes.contains("group/folder-row") {
+                let label = primaryLabel(of: snapshot.element)
+                if !label.isEmpty { selectedTask = label }
+            }
+            // Model and speed are menu controls. Restrict reads to their accessible labels.
+            guard snapshot.canPress, frame.minX >= sidebarLeft + 300,
+                  frame.maxY >= (windowFrame?.midY ?? 0) else { continue }
+            if snapshot.role == (kAXPopUpButtonRole as String)
+                || attribute("AXHasPopup", of: snapshot.element) != nil
+                || attribute("AXExpanded", of: snapshot.element) != nil {
+                menuCount += 1
+                let text = controlText(in: snapshot.element).joined(separator: " ")
+                if !text.isEmpty { controlLabels.append(text) }
+                let label = primaryLabel(of: snapshot.element)
+                if !label.isEmpty { controlLabels.append(label) }
+            }
+        }
+        let composer = ComposerDisplayState.fromControlLabels(controlLabels, modelNames: CodexModelCatalog.modelNames())
+        let status = "activation=\(activation.rawValue) appCapability=\(appCapability.rawValue)/\(appSettable.boolValue) windowCapability=\(windowCapability.rawValue)/\(windowSettable.boolValue) elements=\(elements.count) depth=\(elements.last?.depth ?? 0) frames=\(frameCount) windowFrame=\(windowFrame != nil) current=\(currentCount) menus=\(menuCount) selectedLabel=\(selectedTask != nil) model=\(composer.modelTitle != nil) speed=\(composer.speedTitle != nil)"
+        reportReadStatus(status)
+        return VisibleContext(
+            projectName: selectedSidebarProjectName(from: elements, sidebarLeft: sidebarLeft),
+            selectedTaskLabel: selectedTask,
+            composer: composer
+        )
+    }
+
+    private func reportReadStatus(_ status: String) {
+        guard status != lastReadStatus else { return }
+        lastReadStatus = status
+        logger.notice("Composer reader: \(status, privacy: .public)")
+    }
+
+    private func controlText(in element: AXUIElement, depth: Int = 0) -> [String] {
+        guard depth < 12 else { return [] }
+        if stringAttribute(kAXRoleAttribute, of: element) == kAXStaticTextRole as String {
+            let text = primaryLabel(of: element)
+            return text.isEmpty ? [] : [text]
+        }
+        let children = attribute(kAXChildrenAttribute, of: element) as? [AXUIElement] ?? []
+        return children.flatMap { controlText(in: $0, depth: depth + 1) }
+    }
+
+    private func primaryLabel(of element: AXUIElement) -> String {
+        for name in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
+            let value = stringAttribute(name, of: element)
+            if !value.isEmpty { return value }
+        }
+        return ""
+    }
+
+    private func selectedSidebarProjectName(from elements: [ElementSnapshot], sidebarLeft: CGFloat) -> String? {
+        let rows = elements.compactMap {
             snapshot -> SidebarSelectionRow? in
-            guard snapshot.role == (kAXButtonRole as String),
-                  let frame = rectAttribute("AXFrame", of: snapshot.element),
-                  frame.minX < 20 else {
+            guard let frame = frame(of: snapshot.element),
+                  frame.minX < sidebarLeft + 300 else {
                 return nil
             }
 
             let classes = stringListAttribute("AXDOMClassList", of: snapshot.element)
             if classes.contains("group/folder-row"), !snapshot.rawText.isEmpty {
-                if classes.contains("bg-token-list-hover-background") {
+                if isCurrentPage(snapshot.element) {
                     return .selectedProject(
-                        name: snapshot.rawText,
+                        name: primaryLabel(of: snapshot.element),
                         minY: frame.minY,
                         height: frame.height
                     )
                 } else {
                     return .project(
-                        name: snapshot.rawText,
+                        name: primaryLabel(of: snapshot.element),
                         minY: frame.minY,
                         height: frame.height
                     )
                 }
             }
-            if classes.contains("bg-token-list-hover-background") {
+            if isCurrentPage(snapshot.element) {
                 return .selectedTask(minY: frame.minY, height: frame.height)
             }
             return nil
         }
         return SidebarSelectionResolver.projectName(from: rows)
+    }
+
+    private func isCurrentPage(_ element: AXUIElement) -> Bool {
+        stringAttribute("AXARIACurrent", of: element) == "page"
+            || booleanAttribute(kAXSelectedAttribute, of: element)
     }
 
     func apply(effort choice: EffortChoice) async throws {
@@ -122,23 +213,22 @@ final class CodexAccessibilityController {
         try await send(commands)
     }
 
-    func apply(speed choice: SpeedChoice) async throws {
+    func apply(speed choice: SpeedChoice, readSettings: () -> ComposerSettings?) async throws {
         try prepareCommandBridge()
-        let targetServiceTier = choice.rawValue
-        if currentServiceTier() == targetServiceTier {
+        guard let settings = readSettings() else {
+            throw ControllerError.controlNotFound(.speed)
+        }
+        if (settings.serviceTier ?? "default") == choice.rawValue {
             return
         }
         try await send([.toggleFastMode])
-
-        if currentServiceTier() != nil {
-            for _ in 0..<12 {
-                if currentServiceTier() == targetServiceTier {
-                    return
-                }
-                try await Task.sleep(nanoseconds: 100_000_000)
+        for _ in 0..<20 {
+            if let updated = readSettings(), (updated.serviceTier ?? "default") == choice.rawValue {
+                return
             }
-            throw ControllerError.actionFailed
+            try await Task.sleep(for: .milliseconds(100))
         }
+        throw ControllerError.actionFailed
     }
 
     private func prepareCommandBridge() throws {
@@ -218,23 +308,6 @@ final class CodexAccessibilityController {
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
         return true
-    }
-
-    private func currentServiceTier() -> String? {
-        let configURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/config.toml")
-        guard let contents = try? String(contentsOf: configURL, encoding: .utf8),
-              let expression = try? NSRegularExpression(
-                  pattern: #"(?m)^\s*service_tier\s*=\s*\"([^\"]+)\""#
-              ),
-              let match = expression.firstMatch(
-                  in: contents,
-                  range: NSRange(contents.startIndex..., in: contents)
-              ),
-              let valueRange = Range(match.range(at: 1), in: contents) else {
-            return nil
-        }
-        return String(contents[valueRange])
     }
 
     func diagnosticAccessibilityTree(processIdentifier: pid_t? = nil) throws -> [String] {
@@ -335,16 +408,23 @@ final class CodexAccessibilityController {
     }
 
     private func enableEnhancedAccessibility(for application: AXUIElement) -> AXError {
-        AXUIElementSetAttributeValue(
+        var processIdentifier: pid_t = 0
+        guard AXUIElementGetPid(application, &processIdentifier) == .success else { return .invalidUIElement }
+        if activatedProcessIdentifier == processIdentifier { return .success }
+        let result = AXUIElementSetAttributeValue(
             application,
             AccessibilityRuntimePolicy.activationAttribute as CFString,
             kCFBooleanTrue
         )
+        if result == .success,
+           booleanAttribute(AccessibilityRuntimePolicy.activationAttribute, of: application) {
+            activatedProcessIdentifier = processIdentifier
+        }
+        return result
     }
 
     private func accessibilityElements(
-        in application: AXUIElement,
-        sidebarOnly: Bool = false
+        in application: AXUIElement
     ) -> [ElementSnapshot] {
         let roots: [AXUIElement]
         if let focusedWindow = attribute(kAXFocusedWindowAttribute, of: application),
@@ -356,20 +436,12 @@ final class CodexAccessibilityController {
             roots = [application]
         }
 
-        var result: [ElementSnapshot] = []
-        var queue = roots.map { ($0, 0) }
-        var cursor = 0
-        var visited: Set<CFHashCode> = []
-
-        while cursor < queue.count, result.count < 5_000 {
-            let (element, depth) = queue[cursor]
-            cursor += 1
-
-            let elementHash = CFHash(element)
-            guard visited.insert(elementHash).inserted else {
-                continue
+        let elements = AccessibilityRuntimePolicy.traverse(roots: roots) { element in
+            AccessibilityRuntimePolicy.childAttributeNames.flatMap {
+                attribute($0, of: element) as? [AXUIElement] ?? []
             }
-
+        }
+        return elements.map { element, depth in
             let role = stringAttribute(kAXRoleAttribute, of: element)
             let text = [
                 stringAttribute(kAXTitleAttribute, of: element),
@@ -381,35 +453,15 @@ final class CodexAccessibilityController {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
             let actions = actionNames(of: element)
-            result.append(
-                ElementSnapshot(
-                    element: element,
-                    depth: depth,
-                    role: role,
-                    rawText: text,
-                    text: normalized(text),
-                    canPress: actions.contains(kAXPressAction as String)
-                )
+            return ElementSnapshot(
+                element: element,
+                depth: depth,
+                role: role,
+                rawText: text,
+                text: normalized(text),
+                canPress: actions.contains(kAXPressAction as String)
             )
-
-            guard depth < AccessibilityRuntimePolicy.maximumTraversalDepth else {
-                continue
-            }
-            if sidebarOnly,
-               depth >= 12,
-               let frame = rectAttribute("AXFrame", of: element),
-               frame.minX >= 300 {
-                continue
-            }
-            for childAttribute in AccessibilityRuntimePolicy.childAttributeNames {
-                guard let children = attribute(childAttribute, of: element) as? [AXUIElement] else {
-                    continue
-                }
-                queue.append(contentsOf: children.map { ($0, depth + 1) })
-            }
         }
-
-        return result
     }
 
     private func bestOpener(for kind: ControlKind, among elements: [ElementSnapshot]) -> AXUIElement? {
@@ -507,6 +559,18 @@ final class CodexAccessibilityController {
             return nil
         }
         return rect
+    }
+
+    private func frame(of element: AXUIElement) -> CGRect? {
+        guard let position = attribute(kAXPositionAttribute, of: element),
+              let size = attribute(kAXSizeAttribute, of: element),
+              CFGetTypeID(position) == AXValueGetTypeID(),
+              CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var origin = CGPoint.zero
+        var dimensions = CGSize.zero
+        guard AXValueGetValue(unsafeDowncast(position, to: AXValue.self), .cgPoint, &origin),
+              AXValueGetValue(unsafeDowncast(size, to: AXValue.self), .cgSize, &dimensions) else { return nil }
+        return CGRect(origin: origin, size: dimensions)
     }
 
     private func actionNames(of element: AXUIElement) -> [String] {

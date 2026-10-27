@@ -10,29 +10,30 @@ public enum TouchBarLayoutMode: Equatable, Sendable {
 }
 
 public enum TouchBarProjectStripMetrics {
-    public static let navigationButtonWidth = 44.0
+    public static let navigationButtonWidth = 17.0
+    public static let navigationButtonHeight = 30.0
     public static let itemSpacing = 4.0
     public static let navigationSlotWidth = navigationButtonWidth + itemSpacing
-    public static let compactWidth = 392.0
-    public static let compactWidthWithWeeklyLimit = 342.0
-    public static let expandedWidth = 542.0
+    public static let compactWidth = 419.0
+    public static let compactWidthWithWeeklyLimit = 369.0
+    public static let expandedWidth = 569.0
+
+    public static func needsExpansion(contentWidth: Double, hasWeeklyLimit: Bool, settingsExtraWidth: Double) -> Bool {
+        contentWidth > width(for: .projects, hasWeeklyLimit: hasWeeklyLimit, settingsExtraWidth: settingsExtraWidth)
+            + navigationSlotWidth
+    }
 
     public static func width(
         for mode: TouchBarLayoutMode,
-        hasWeeklyLimit: Bool
+        hasWeeklyLimit: Bool,
+        settingsExtraWidth: Double = 0
     ) -> Double {
         switch mode {
         case .expandedProjects:
             expandedWidth
         case .projects, .setting:
-            hasWeeklyLimit ? compactWidthWithWeeklyLimit : compactWidth
+            max(120, (hasWeeklyLimit ? compactWidthWithWeeklyLimit : compactWidth) - settingsExtraWidth)
         }
-    }
-}
-
-public enum TouchBarSettingTitle {
-    public static func mainTitle(baseTitle: String, selectedTitle _: String) -> String {
-        baseTitle
     }
 }
 

@@ -88,7 +88,7 @@ import Testing
 
     #expect(button.image?.isTemplate == false)
     #expect(!button.isBordered)
-    #expect(button.layer?.backgroundColor == TouchBarControlStyle.backgroundColor.cgColor)
+    #expect(button.layer?.backgroundColor == TouchBarControlStyle.navigationBackgroundColor.cgColor)
     #expect(button.layer?.cornerRadius == TouchBarControlStyle.cornerRadius)
 }
 
@@ -104,14 +104,16 @@ import Testing
     #expect(unread.size.height == plain.size.height)
 }
 
-@Test func effortChoicesMatchCodexWhileUltraTargetsTheHiddenMaxStep() {
+@Test func effortChoicesIncludeTheSelectedMaxStep() {
     #expect(EffortChoice.allCases.map(\.rawValue) == [
         "low",
         "medium",
         "high",
         "xhigh",
+        "max",
         "ultra",
     ])
     #expect(EffortChoice.commandOptionCount == 6)
+    #expect(EffortChoice.max.commandTargetIndex == 4)
     #expect(EffortChoice.ultra.commandTargetIndex == 5)
 }

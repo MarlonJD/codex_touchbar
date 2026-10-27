@@ -63,9 +63,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.2.4</string>
+  <string>0.2.7</string>
   <key>CFBundleVersion</key>
-  <string>6</string>
+  <string>10</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_SYSTEM_VERSION</string>
   <key>LSUIElement</key>
@@ -77,8 +77,12 @@ cat >"$INFO_PLIST" <<PLIST
 PLIST
 
 plutil -lint "$INFO_PLIST" >/dev/null
-if /usr/bin/security find-identity -v -p codesigning 2>/dev/null | /usr/bin/grep -Fq "\"$SIGN_IDENTITY\""; then
-  codesign --force --options runtime --timestamp=none --sign "$SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null
+SIGNING_IDENTITIES="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null)"
+RESOLVED_SIGN_IDENTITY="$(/usr/bin/awk -v requested="$SIGN_IDENTITY" '
+  $2 == requested || index($0, "\"" requested "\"") { print $2; exit }
+' <<<"$SIGNING_IDENTITIES")"
+if [[ -n "$RESOLVED_SIGN_IDENTITY" ]]; then
+  codesign --force --options runtime --timestamp=none --sign "$RESOLVED_SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null
 else
   echo "warning: $SIGN_IDENTITY not found; using an unstable ad-hoc signature" >&2
   codesign --force --sign - "$APP_BUNDLE" >/dev/null

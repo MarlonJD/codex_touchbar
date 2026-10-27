@@ -40,6 +40,21 @@ public struct ActiveThread: Equatable, Sendable {
     public let projectRecencyAt: Date
     public let isActive: Bool
     public let isUnread: Bool
+    public let hostID: String
+    public let projectName: String?
+
+    public var identity: DesktopThreadIdentity { .init(hostID: hostID, threadID: id) }
+
+    public var navigationURL: URL? {
+        var url = URLComponents()
+        url.scheme = "codex"
+        url.host = "threads"
+        url.path = "/\(id)"
+        if hostID != "local" {
+            url.queryItems = [URLQueryItem(name: "hostId", value: hostID)]
+        }
+        return url.url
+    }
 
     public init(
         id: String,
@@ -48,7 +63,9 @@ public struct ActiveThread: Equatable, Sendable {
         updatedAt: Date,
         projectRecencyAt: Date? = nil,
         isActive: Bool = true,
-        isUnread: Bool = false
+        isUnread: Bool = false,
+        hostID: String = "local",
+        projectName: String? = nil
     ) {
         self.id = id
         self.cwd = cwd
@@ -57,6 +74,8 @@ public struct ActiveThread: Equatable, Sendable {
         self.projectRecencyAt = projectRecencyAt ?? updatedAt
         self.isActive = isActive
         self.isUnread = isUnread
+        self.hostID = hostID
+        self.projectName = projectName
     }
 }
 
@@ -67,6 +86,15 @@ public struct ProjectGroup: Equatable, Sendable, Identifiable {
     public let isUnnamed: Bool
     public let hasUnread: Bool
     public let isSelected: Bool
+    public let hostID: String
+
+    public var symbolName: String {
+        switch hostID {
+        case "local": "folder.fill"
+        case "durable": "cloud.fill"
+        default: "desktopcomputer"
+        }
+    }
 
     public init(
         id: String,
@@ -74,7 +102,8 @@ public struct ProjectGroup: Equatable, Sendable, Identifiable {
         threads: [ActiveThread],
         isUnnamed: Bool,
         hasUnread: Bool = false,
-        isSelected: Bool = false
+        isSelected: Bool = false,
+        hostID: String = "local"
     ) {
         self.id = id
         self.name = name
@@ -82,6 +111,7 @@ public struct ProjectGroup: Equatable, Sendable, Identifiable {
         self.isUnnamed = isUnnamed
         self.hasUnread = hasUnread
         self.isSelected = isSelected
+        self.hostID = hostID
     }
 
     public func displayName(maxLength: Int = 20) -> String {

@@ -32,16 +32,18 @@ final class TouchBarController: NSObject {
     private var trayItemWasAdded = false
     private var layoutState = TouchBarLayoutState()
     private var weeklyLimit: WeeklyLimitUsage?
+    private var composerDisplay = ComposerDisplayState()
+    private var settingsExtraWidth: Double = 0
     private var projectStripWidthConstraint: NSLayoutConstraint?
     private var settingSelections: [NSTouchBarItem.Identifier: SettingSelection] = [:]
     private lazy var weeklyLimitButton = makeWeeklyLimitButton()
     private lazy var effortButton = makeMainSettingButton(
-        title: effortTitle,
+        title: "—",
         symbolName: "brain.head.profile",
         action: #selector(showEffortOptions)
     )
     private lazy var speedButton = makeMainSettingButton(
-        title: speedTitle,
+        title: "—",
         symbolName: "speedometer",
         action: #selector(showSpeedOptions)
     )
@@ -85,6 +87,7 @@ final class TouchBarController: NSObject {
 
     func update(groups: [ProjectGroup]) {
         self.groups = groups
+        updateVisibleItems()
         scrubber.reloadData()
         scrubber.selectedIndex = groups.firstIndex(where: \.isSelected) ?? -1
         if groups.first?.hasUnread == true || groups.first?.isSelected == true {
@@ -95,16 +98,24 @@ final class TouchBarController: NSObject {
         enforceCloseBoxVisibility()
     }
 
-    func showSelectedEffort(_ choice: EffortChoice) {
-        let selectedTitle = "\(effortTitle): \(choice.title)"
+    func showComposer(_ display: ComposerDisplayState) {
+        guard composerDisplay != display else { return }
+        composerDisplay = display
         effortButton.image = TouchBarImageRenderer.image(
-            title: TouchBarSettingTitle.mainTitle(
-                baseTitle: effortTitle,
-                selectedTitle: choice.title
-            ),
+            title: display.modelTitle ?? "—",
             symbolName: "brain.head.profile"
         )
-        effortButton.setAccessibilityLabel(selectedTitle)
+        speedButton.image = TouchBarImageRenderer.image(
+            title: display.speedTitle ?? "—",
+            symbolName: "speedometer"
+        )
+        effortButton.setAccessibilityLabel(display.modelTitle ?? effortTitle)
+        speedButton.setAccessibilityLabel(display.speedTitle ?? speedTitle)
+        let baseline = TouchBarImageRenderer.image(title: effortTitle, symbolName: "brain.head.profile").size.width
+            + TouchBarImageRenderer.image(title: speedTitle, symbolName: "speedometer").size.width
+        let current = (effortButton.image?.size.width ?? 0) + (speedButton.image?.size.width ?? 0)
+        settingsExtraWidth = max(0, current - baseline)
+        updateVisibleItems()
     }
 
     func showWeeklyLimit(_ usage: WeeklyLimitUsage?) {
@@ -126,18 +137,6 @@ final class TouchBarController: NSObject {
         if visibilityChanged, layoutState.mode == .projects {
             updateVisibleItems()
         }
-    }
-
-    func showSelectedSpeed(_ choice: SpeedChoice) {
-        let selectedTitle = "\(speedTitle): \(choice.title)"
-        speedButton.image = TouchBarImageRenderer.image(
-            title: TouchBarSettingTitle.mainTitle(
-                baseTitle: speedTitle,
-                selectedTitle: choice.title
-            ),
-            symbolName: "speedometer"
-        )
-        speedButton.setAccessibilityLabel(selectedTitle)
     }
 
     @discardableResult
@@ -298,16 +297,30 @@ final class TouchBarController: NSObject {
     }
 
     private var projectStripWidth: CGFloat {
-        CGFloat(TouchBarProjectStripMetrics.width(
+        let width = TouchBarProjectStripMetrics.width(
             for: layoutState.mode,
-            hasWeeklyLimit: weeklyLimit != nil
-        ))
+            hasWeeklyLimit: weeklyLimit != nil,
+            settingsExtraWidth: settingsExtraWidth
+        )
+        return CGFloat(width + (layoutState.mode == .projects && !projectsOverflow
+            ? TouchBarProjectStripMetrics.navigationSlotWidth : 0))
+    }
+
+    private var projectsOverflow: Bool {
+        let widths = groups.indices.map { projectItemWidth(at: $0) }
+        let contentWidth = widths.reduce(0, +)
+            + Double(max(0, widths.count - 1)) * TouchBarProjectStripMetrics.itemSpacing
+        return TouchBarProjectStripMetrics.needsExpansion(
+            contentWidth: contentWidth,
+            hasWeeklyLimit: weeklyLimit != nil,
+            settingsExtraWidth: settingsExtraWidth
+        )
     }
 
     private func weeklyLimitTitle(remainingPercent: Int) -> String {
         Locale.preferredLanguages.first?.hasPrefix("tr") == true
-            ? "%\(remainingPercent) kaldı"
-            : "\(remainingPercent)% left"
+            ? "%\(remainingPercent)"
+            : "\(remainingPercent)%"
     }
 
     private func weeklyLimitAccessibilityLabel(remainingPercent: Int) -> String {
@@ -343,14 +356,16 @@ final class TouchBarController: NSObject {
     }
 
     private func updateVisibleItems() {
+        if layoutState.mode == .expandedProjects, !projectsOverflow {
+            layoutState.collapseProjects()
+        }
         updateProjectStripWidth()
+        var identifiers: [NSTouchBarItem.Identifier]
         switch layoutState.mode {
         case .projects:
-            var identifiers: [NSTouchBarItem.Identifier] = [
-                Self.projectsItemIdentifier,
-                Self.expandProjectsItemIdentifier,
-                .flexibleSpace,
-            ]
+            identifiers = [Self.projectsItemIdentifier]
+            if projectsOverflow { identifiers.append(Self.expandProjectsItemIdentifier) }
+            identifiers.append(.flexibleSpace)
             if weeklyLimit != nil {
                 identifiers.append(Self.weeklyLimitItemIdentifier)
             }
@@ -358,23 +373,25 @@ final class TouchBarController: NSObject {
                 Self.effortItemIdentifier,
                 Self.speedItemIdentifier,
             ])
-            touchBar.defaultItemIdentifiers = identifiers
         case .expandedProjects:
-            touchBar.defaultItemIdentifiers = [
+            identifiers = [
                 Self.projectsItemIdentifier,
                 .flexibleSpace,
                 Self.collapseProjectsItemIdentifier,
             ]
         case .setting(.effort):
-            touchBar.defaultItemIdentifiers = [Self.backItemIdentifier]
+            identifiers = [Self.backItemIdentifier]
                 + EffortChoice.allCases.indices.map { settingIdentifier(prefix: "effort", index: $0) }
         case .setting(.speed):
-            touchBar.defaultItemIdentifiers = [
+            identifiers = [
                 Self.backItemIdentifier,
                 .flexibleSpace,
             ]
                 + SpeedChoice.allCases.indices.map { settingIdentifier(prefix: "speed", index: $0) }
                 + [.flexibleSpace]
+        }
+        if touchBar.defaultItemIdentifiers != identifiers {
+            touchBar.defaultItemIdentifiers = identifiers
         }
         enforceCloseBoxVisibility()
     }
@@ -504,7 +521,8 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
                 title: group.displayName(),
                 count: group.threads.count,
                 hasUnread: group.hasUnread,
-                isSelected: group.isSelected
+                isSelected: group.isSelected,
+                symbolName: group.symbolName
             )
         }
         return view
@@ -515,6 +533,10 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
         layout: NSScrubberFlowLayout,
         sizeForItemAt itemIndex: Int
     ) -> NSSize {
+        NSSize(width: projectItemWidth(at: itemIndex), height: 30)
+    }
+
+    private func projectItemWidth(at itemIndex: Int) -> Double {
         let title: String
         if groups.isEmpty {
             title = "No active Codex tasks"
@@ -537,10 +559,7 @@ extension TouchBarController: NSScrubberDataSource, @preconcurrency NSScrubberFl
         } else {
             unreadIndicatorWidth = 0
         }
-        return NSSize(
-            width: min(max(70, ceil(textWidth) + 39 + unreadIndicatorWidth), 190),
-            height: 30
-        )
+        return min(max(70, ceil(textWidth) + 39 + unreadIndicatorWidth), 190)
     }
 
     func scrubber(_ scrubber: NSScrubber, didSelectItemAt selectedIndex: Int) {

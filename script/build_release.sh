@@ -4,10 +4,10 @@ set -euo pipefail
 PRODUCT_NAME="CodexTouchBar"
 DISPLAY_NAME="Codex Touch Bar"
 DEFAULT_SIGN_IDENTITY="Developer ID Application: Burak Karahan (UPK4SC93AN)"
-DEFAULT_NOTARY_PROFILE="desktop-updater-notary"
+DEFAULT_NOTARY_PROFILE="general-notary"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-0.2.4}"
+VERSION="${1:-0.2.7}"
 VERSION="${VERSION#v}"
 SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-$DEFAULT_SIGN_IDENTITY}"
 NOTARY_PROFILE="${NOTARY_KEYCHAIN_PROFILE:-$DEFAULT_NOTARY_PROFILE}"

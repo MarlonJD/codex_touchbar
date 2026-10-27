@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CodexTouchBarCore
 import Darwin
 
@@ -11,23 +12,38 @@ private func runApplication() {
     withExtendedLifetime(delegate) {}
 }
 
+@MainActor
 private func runDiagnostics() {
     let scanner = RolloutScanner()
+    let accountRateLimitClient = CodexAccountRateLimitClient()
     let grouper = ProjectGrouper()
+    let desktop = CodexDesktopStateClient()
+    desktop.start()
 
-    Task {
-        let snapshot = await scanner.scanSnapshot()
-        if let weeklyLimit = snapshot.weeklyLimit {
+    Task { @MainActor in
+        async let snapshotRequest = scanner.scanSnapshot()
+        async let accountLimitRequest = accountRateLimitClient.weeklyLimit()
+        let (snapshot, accountLimit) = await (
+            snapshotRequest,
+            accountLimitRequest
+        )
+        let weeklyLimit = accountLimit
+        try? await Task.sleep(for: .seconds(2))
+        let threads = desktop.state.merging(localThreads: snapshot.threads)
+        print("Accessibility permission\t\(AXIsProcessTrusted() ? "Granted" : "Required")")
+        print("Desktop stream\t\(desktop.isConnected ? "Connected" : "Unavailable")")
+        print("Observed hosts\t\(Set(desktop.state.identities.map(\.hostID)).sorted().joined(separator: ", "))")
+        if let weeklyLimit {
             print("Weekly limit\t\(weeklyLimit.remainingPercent)% remaining")
         } else {
             print("Weekly limit\tUnavailable")
         }
-        print("Unread threads\t\(snapshot.threads.filter(\.isUnread).count)")
+        print("Unread threads\t\(threads.filter(\.isUnread).count)")
         let selectedProjects = snapshot.selectedProjectRoots.map(\.lastPathComponent)
         print("Selected projects\t\(selectedProjects.joined(separator: ","))")
 
         let groups = grouper.groups(
-            from: snapshot.threads,
+            from: threads,
             selectedProjectRoots: snapshot.selectedProjectRoots
         )
         if groups.isEmpty {
@@ -40,9 +56,15 @@ private func runDiagnostics() {
                 ]
                 .compactMap { $0 }
                 .joined(separator: ",")
-                print("\(group.name)\t\(group.threads.count)\t\(state)\t\(group.threads.map(\.id).joined(separator: ","))")
+                print("\(group.name)\t\(group.hostID)\t\(group.threads.count)\t\(state)\t\(group.threads.map(\.id).joined(separator: ","))")
             }
         }
+        for identity in desktop.state.identities.sorted(by: { $0.threadID < $1.threadID }) {
+            if let settings = desktop.state.settings(for: identity) {
+                print("Settings\t\(identity.hostID)\t\(identity.threadID)\t\(settings.modelAndEffortTitle ?? "Unavailable")\t\(CodexModelCatalog.speedTitle(for: settings) ?? "Unavailable")")
+            }
+        }
+        desktop.stop()
         exit(EXIT_SUCCESS)
     }
     dispatchMain()

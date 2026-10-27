@@ -83,13 +83,20 @@ import Testing
     #expect(state.closeBoxVisibility(afterPresentationSucceeded: false))
 }
 
-@Test func mainSettingTitleStaysCompactAfterASelection() {
-    #expect(TouchBarSettingTitle.mainTitle(
-        baseTitle: "Çaba",
-        selectedTitle: "Çok Yüksek"
-    ) == "Çaba")
-    #expect(TouchBarSettingTitle.mainTitle(
-        baseTitle: "Hız",
-        selectedTitle: "Hızlı"
-    ) == "Hız")
+@Test func longModelLabelKeepsSettingsVisibleAndProjectsScrollable() {
+    #expect(TouchBarProjectStripMetrics.width(
+        for: .projects, hasWeeklyLimit: true, settingsExtraWidth: 100
+    ) == 269)
+    #expect(TouchBarProjectStripMetrics.width(
+        for: .projects, hasWeeklyLimit: true, settingsExtraWidth: 500
+    ) == 120)
+    #expect(TouchBarProjectStripMetrics.width(
+        for: .expandedProjects, hasWeeklyLimit: true, settingsExtraWidth: 100
+    ) == TouchBarProjectStripMetrics.expandedWidth)
+    #expect(!TouchBarProjectStripMetrics.needsExpansion(
+        contentWidth: 290, hasWeeklyLimit: true, settingsExtraWidth: 100
+    ))
+    #expect(TouchBarProjectStripMetrics.needsExpansion(
+        contentWidth: 291, hasWeeklyLimit: true, settingsExtraWidth: 100
+    ))
 }

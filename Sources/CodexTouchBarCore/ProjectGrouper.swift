@@ -19,19 +19,35 @@ public struct ProjectGrouper: Sendable {
     public func groups(
         from threads: [ActiveThread],
         selectedProjectRoots: [URL] = [],
-        selectedProjectName: String? = nil
+        selectedProjectName: String? = nil,
+        selectedThreadIdentity: DesktopThreadIdentity? = nil
     ) -> [ProjectGroup] {
         var selectedProjectIDs = Set<String>()
         var grouped: [String: (name: String, isUnnamed: Bool, threads: [ActiveThread])] = [:]
 
         for thread in threads {
-            let identity = projectIdentity(for: thread.cwd)
+            let identity: (id: String, name: String, isUnnamed: Bool)
+            if thread.hostID == "local" {
+                identity = projectIdentity(for: thread.cwd)
+            } else {
+                let name = thread.projectName ?? thread.cwd.lastPathComponent
+                identity = (
+                    "\(thread.hostID):\(thread.projectName ?? thread.cwd.path)",
+                    name.isEmpty ? Self.tasksGroupName : name,
+                    thread.projectName == Self.tasksGroupName
+                )
+            }
             var entry = grouped[identity.id] ?? (identity.name, identity.isUnnamed, [])
             entry.threads.append(thread)
             grouped[identity.id] = entry
         }
 
-        if let selectedProjectName {
+        if let selectedThreadIdentity,
+           let matchingID = grouped.first(where: {
+               $0.value.threads.contains { $0.identity == selectedThreadIdentity }
+           })?.key {
+            selectedProjectIDs.insert(matchingID)
+        } else if let selectedProjectName {
             let normalizedSelectedName = normalizedProjectName(selectedProjectName)
             if let matchingID = grouped.first(where: {
                 normalizedProjectName($0.value.name) == normalizedSelectedName
@@ -71,7 +87,8 @@ public struct ProjectGrouper: Sendable {
                 },
                 isUnnamed: entry.isUnnamed,
                 hasUnread: entry.threads.contains { $0.isUnread },
-                isSelected: selectedProjectIDs.contains(id)
+                isSelected: selectedProjectIDs.contains(id),
+                hostID: entry.threads.first?.hostID ?? "local"
             )
         }
         .sorted { lhs, rhs in

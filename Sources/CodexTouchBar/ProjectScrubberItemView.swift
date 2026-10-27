@@ -60,7 +60,8 @@ final class ProjectScrubberItemView: NSScrubberItemView {
         count: Int,
         hasUnread: Bool = false,
         isSelected: Bool = false,
-        isPlaceholder: Bool = false
+        isPlaceholder: Bool = false,
+        symbolName: String = "folder.fill"
     ) {
         let presentation = Self.presentation(
             title: title,
@@ -71,7 +72,7 @@ final class ProjectScrubberItemView: NSScrubberItemView {
         )
         contentView.image = TouchBarImageRenderer.image(
             title: presentation.title,
-            symbolName: isPlaceholder ? "pause.circle" : "folder.fill",
+            symbolName: isPlaceholder ? "pause.circle" : symbolName,
             font: .systemFont(ofSize: 12, weight: .medium),
             textColor: presentation.textColor,
             trailingDotColor: presentation.trailingDotColor
